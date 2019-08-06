@@ -93,49 +93,69 @@ func (e *epub) resolve() error {
 	if err != nil {
 		return err
 	}
-	scanner := bufio.NewScanner(f)
+	defer func() {
+		_ = f.Close()
+	}()
+
+	//scanner := bufio.NewScanner(f)
 
 	index := 0
 	line := 0
 	body := bytes.NewBufferString("")
 	title := ""
 
-	for scanner.Scan() {
+	reader := bufio.NewReader(f)
+
+	for {
+		lineText, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				if err := e.resolveChapter(title, body.String(), index); err != nil {
+					log.Printf("解析章节失败 -> %s - %v", title, err)
+					return err
+				}
+				break
+			}
+			return err
+		}
+
 		if line == 0 {
-			title = scanner.Text()
+			title = lineText
 			e.Epub = goepub.NewEpub(title)
 			line++
 			continue
 		}
 		if line == 1 {
-			e.author = scanner.Text()
+			e.author = lineText
 			line++
 			continue
 		}
-		text := scanner.Text()
-		if text == "" {
+
+		if lineText == "" {
 			continue
 		}
 
 		//如果匹配到标题
-		if e.reg.MatchString(text) || text == "楔子" {
+		if e.reg.MatchString(lineText) || lineText == "楔子" {
 			if err := e.resolveChapter(title, body.String(), index); err != nil {
+				log.Printf("解析章节失败 -> %s - %v", lineText, err)
 				return err
 			}
 			body.Reset()
 			index++
-			title = text
+			title = lineText
 		} else {
-			text = strings.ReplaceAll(strings.ReplaceAll(text, "<", "&lt;"), ">", "&gt;")
-			body.WriteString(text)
+			lineText = strings.ReplaceAll(strings.ReplaceAll(lineText, "<", "&lt;"), ">", "&gt;")
+			body.WriteString(lineText)
 			body.WriteString("\n")
 		}
 		line++
 	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("解析章节出错 -> %v", err)
-		return err
-	}
+
+	//if err := scanner.Err(); err != nil {
+	//	log.Printf("解析章节出错 -> %v", err)
+	//	return err
+	//}
 
 	return nil
 }
@@ -179,7 +199,7 @@ func (e *epub) resolveChapter(title, body string, index int) error {
 		}
 		s += fmt.Sprintf(`<p style="text-indent:2em">%s</p>`, cc)
 	}
-	_, err := e.AddSection(s, title, fmt.Sprintf("%s-%d.xhtml", e.Title(), index), "")
+	_, err := e.AddSection(s, title, fmt.Sprintf("%d.xhtml", index), "")
 	if err != nil {
 		log.Printf("添加章节失败 -> %v - %s", err, title)
 		return err

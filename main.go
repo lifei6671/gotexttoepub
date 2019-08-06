@@ -22,3 +22,7 @@ func main() {
 		log.Fatalf("启动命令行失败 -> %s", err)
 	}
 }
+
+func init() {
+	log.SetFlags(log.Lshortfile | log.LstdFlags)
+}
