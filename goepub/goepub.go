@@ -180,6 +180,11 @@ func (e *epub) Convert(save string) error {
 		if err != nil {
 			return err
 		}
+		if _, err := os.Stat(filepath.Dir(s)); os.IsNotExist(err) {
+			if err := os.MkdirAll(filepath.Dir(s), 0755); err != nil {
+				log.Printf("创建目录失败 -> %s", err)
+			}
+		}
 		save = s
 	}
 
