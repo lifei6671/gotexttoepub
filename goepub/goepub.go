@@ -52,7 +52,17 @@ func (e *epub) SetCover(cover string) *epub {
 			return e
 		}
 		defer resp.Body.Close()
-		f, err := ioutil.TempFile("", "cover*."+filepath.Ext(cover))
+		ext := filepath.Ext(cover)
+		if ext == "" {
+			contentType := resp.Header.Get("Content-Type")
+			if strings.HasPrefix(contentType, "image/") {
+				ext = strings.TrimPrefix(contentType, "image/")
+			}
+		}
+		if ext == "" {
+			ext = ".jpg"
+		}
+		f, err := ioutil.TempFile("", "cover*."+ext)
 		if err != nil {
 			log.Printf("生成临时文件失败 -> %v", err)
 			return e
@@ -63,7 +73,6 @@ func (e *epub) SetCover(cover string) *epub {
 			log.Printf("保存封面失败 -> %v", err)
 			return e
 		}
-
 		e.cover = f.Name()
 	} else {
 		e.cover = cover
@@ -120,18 +129,19 @@ func (e *epub) resolve() error {
 		}
 
 		if line == 0 {
-			title = lineText
+			title = strings.TrimSpace(lineText)
 			e.Epub = goepub.NewEpub(title)
-			line++
-			continue
-		}
-		if line == 1 {
-			e.author = lineText
 			line++
 			continue
 		}
 
 		if lineText == "" {
+			continue
+		}
+		//解析作者
+		if line >= 1 && e.author == "" {
+			e.author = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(lineText, "作者"), ":"), "："))
+			line++
 			continue
 		}
 
