@@ -48,7 +48,7 @@ var Start = &cli.Command{
 		epub.SetCover(c.String("cover"))
 		regexr := c.String("regexr")
 		if regexr == "" {
-			regexr = `(^第.{1,20}章.{0,50})`
+			regexr = `(^第.{1,20}(章|回).{0,50})`
 		}
 		reg := regexp.MustCompile(regexr)
 
