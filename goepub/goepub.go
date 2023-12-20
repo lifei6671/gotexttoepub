@@ -131,7 +131,10 @@ func (e *epub) resolve() error {
 
 		if line == 0 {
 			title = strings.TrimSpace(lineText)
-			e.Epub = goepub.NewEpub(title)
+			e.Epub, err = goepub.NewEpub(title)
+			if err != nil {
+				panic("goepub.NewEpub ->" + err.Error())
+			}
 			line++
 			continue
 		}
