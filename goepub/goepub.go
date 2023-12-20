@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	goepub "github.com/bmaupin/go-epub"
 	"io"
 	"io/ioutil"
 	"log"
@@ -14,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	goepub "github.com/go-shiori/go-epub"
 )
 
 type epub struct {
