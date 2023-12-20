@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -53,17 +53,16 @@ func (e *epub) SetCover(cover string) *epub {
 			return e
 		}
 		defer resp.Body.Close()
-		ext := filepath.Ext(cover)
-		if ext == "" {
-			contentType := resp.Header.Get("Content-Type")
-			if strings.HasPrefix(contentType, "image/") {
-				ext = strings.TrimPrefix(contentType, "image/")
-			}
+		contentType := resp.Header.Get("Content-Type")
+		var ext string
+		exts, err := mime.ExtensionsByType(contentType)
+		if err == nil && len(exts) > 0 {
+			ext = exts[0]
 		}
 		if ext == "" {
 			ext = ".jpg"
 		}
-		f, err := ioutil.TempFile("", "cover*."+ext)
+		f, err := os.CreateTemp("", "cover*."+ext)
 		if err != nil {
 			log.Printf("生成临时文件失败 -> %v", err)
 			return e
