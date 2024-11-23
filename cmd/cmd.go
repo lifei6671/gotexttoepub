@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"github.com/lifei6671/gotexttoepub/goepub"
-	"gopkg.in/urfave/cli.v2"
+	"github.com/urfave/cli/v2"
 	"log"
 	"regexp"
 	"time"

@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/lifei6671/gotexttoepub/cmd"
-	"gopkg.in/urfave/cli.v2"
+	"github.com/urfave/cli/v2"
 	"log"
 	"os"
 )
