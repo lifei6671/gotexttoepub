@@ -1,13 +1,15 @@
 package main
 
 import (
-	"github.com/lifei6671/gotexttoepub/cmd"
-	"github.com/urfave/cli/v2"
 	"log"
 	"os"
+
+	"github.com/urfave/cli/v2"
+
+	"github.com/lifei6671/gotexttoepub/cmd"
 )
 
-const APP_VERSION = "1.1"
+const APP_VERSION = "1.2"
 
 func main() {
 	app := &cli.App{}
