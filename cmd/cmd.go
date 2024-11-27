@@ -1,11 +1,13 @@
 package cmd
 
 import (
-	"github.com/lifei6671/gotexttoepub/goepub"
-	"github.com/urfave/cli/v2"
 	"log"
 	"regexp"
 	"time"
+
+	"github.com/urfave/cli/v2"
+
+	"github.com/lifei6671/gotexttoepub/goepub"
 )
 
 var Start = &cli.Command{
@@ -26,7 +28,7 @@ var Start = &cli.Command{
 			Usage:   "小说封面",
 		},
 		&cli.StringFlag{
-			Name:    "regexr",
+			Name:    "title-regexp",
 			Aliases: []string{"r"},
 			Value:   "",
 			Usage:   "提取章节标题的正则",
@@ -37,6 +39,12 @@ var Start = &cli.Command{
 			Value:   "",
 			Usage:   "文件输出地址",
 		},
+		&cli.StringFlag{
+			Name:    "volume-regexp",
+			Aliases: []string{"vr"},
+			Value:   "",
+			Usage:   "提取章节标题的正则",
+		},
 	},
 	Action: func(c *cli.Context) error {
 
@@ -46,12 +54,18 @@ var Start = &cli.Command{
 		}
 		epub := goepub.NewConverter()
 		epub.SetCover(c.String("cover"))
-		regexr := c.String("regexr")
+		regexr := c.String("title-regexp")
 		if regexr == "" {
-			regexr = `(^第.{1,20}(章|回).{0,50})`
+			regexr = goepub.ChapterPattern
 		}
 		reg := regexp.MustCompile(regexr)
 
+		volumeRegStr := c.String("volume-regexp")
+		if volumeRegStr == "" {
+			volumeRegStr = goepub.VolumePattern
+		}
+		volumeReg := regexp.MustCompile(volumeRegStr)
+		epub.SetVolumeReg(volumeReg)
 		epub.SetRegExp(reg)
 		epub.SetContent(path)
 
