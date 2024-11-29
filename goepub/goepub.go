@@ -25,28 +25,6 @@ var _fonts embed.FS
 //go:embed Styles
 var _styles embed.FS
 
-// 文件解析规则的正则表达式
-var (
-	TitlePattern   = `^\S+.*$`                               // 第一个非空白行是标题
-	AuthorPattern  = `^作者[:：](.*)$`                          // 第二个非空白行或以“作者”开头的是作者
-	IntroPattern   = `^(内容简介[:：]|简介[:：]|楔子[:：]?)(.*)$`       // 内容简介/简介/楔子
-	VolumePattern  = `^(第[一二三四五六七八九十百零0-9]+(卷|部|集)).{0,30}$` // 卷标题
-	ChapterPattern = `^(第[一二三四五六七八九十百零0-9]+(章|回)).{0,30}$`   // 章节标题
-	ExtraPattern   = `^番外.*$`                                // 番外部分
-)
-
-// Volume 卷的结构
-type Volume struct {
-	Title    string    // 卷标题
-	Chapters []Chapter // 章节列表
-}
-
-// Chapter 章节的结构
-type Chapter struct {
-	Title   string // 章节标题
-	Content string // 章节内容
-}
-
 type epub struct {
 	txtp string
 	*goepub.Epub
@@ -234,7 +212,7 @@ func (e *epub) run(style string) error {
 		if currentCh != nil {
 			// 章节内容
 			lineText := strings.ReplaceAll(strings.ReplaceAll(line, "<", "&lt;"), ">", "&gt;")
-			currentCh.Content += "<p style=\"text-indent:2em\">" + lineText + "</p>\n"
+			currentCh.Content.WriteString("<p style=\"text-indent:2em\">" + lineText + "</p>\n")
 		}
 
 	}
@@ -261,10 +239,10 @@ func (e *epub) run(style string) error {
 			for j, ch := range vol.Chapters {
 				// 如果第一个卷的第一个章节不是标题，则设置小说简介
 				if i == 0 && j == 0 && vol.Title == "" && e.reg != nil && !e.reg.MatchString(ch.Title) {
-					e.SetDescription(removeHTMLTags(ch.Content))
+					e.SetDescription(removeHTMLTags(ch.Content.String()))
 				}
 				chapterFilename := fmt.Sprintf("volume%d_chapter%d.xhtml", i, j)
-				_, err = e.AddSubSection(parentFilename, fmt.Sprintf("<h2>%s</h2>%s", ch.Title, ch.Content), ch.Title, chapterFilename, style)
+				_, err = e.AddSubSection(parentFilename, fmt.Sprintf("<h2>%s</h2>%s", ch.Title, ch.Content.String()), ch.Title, chapterFilename, style)
 				if err != nil {
 					log.Printf("添加章节失败 ->卷：%s - 章: %s - 错误: %v", vol.Title, ch.Title, err)
 					return err
