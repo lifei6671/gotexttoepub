@@ -1,0 +1,33 @@
+[[source]]
+[source.metadata]
+#抓取规则名称，不能重复
+rule_name="香书小说"
+url = "http://www.xbiqugu.net/0/%s/"
+#书名的html属性表达式
+name_regexp = "meta[property=\"og:novel:book_name\"]"
+#作者的html属性表达式
+author_regexp = "meta[property=\"og:novel:author\"]"
+#简介的html属性表达式
+intro_regexp = "meta[property=\"og:description\"]"
+#小说分类的html表达式
+category_regexp = "meta[property=\"og:novel:category\"]"
+#小说封面的属性表达式
+cover_regexp = "meta[property=\"og:image\"]"
+
+
+[source.chapter]
+#是否开启分页
+is_pagination = false
+#如果存在分页，获取分页的html表达式
+pagination_regexp = ""
+#小说章节列表html属性表达式
+catalog_regexp = "#list > dl > dd > a"
+
+[source.content]
+#是否开启分页
+is_pagination = false
+#如果存在分页，获取分页的html表达式
+pagination_regexp = ""
+content_regexp = "#content"
+filter_text = []
+filter_html = ["div","p","script"]

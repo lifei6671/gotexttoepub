@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,13 +15,29 @@ import (
 	"time"
 
 	goepub "github.com/go-shiori/go-epub"
+
+	"github.com/lifei6671/gotexttoepub/internal/util"
 )
 
 type epubConverter struct{}
 
-func (c *epubConverter) Convert(ctx context.Context, book *Book) error {
+func (c *epubConverter) Convert(_ context.Context, book *Book) error {
 	err := book.FullDefault()
-
+	//解析TXT文件
+	e, err := c.parse(book)
+	if err != nil {
+		return err
+	}
+	//设置封面
+	err = c.setCover(book, e)
+	if err != nil {
+		return err
+	}
+	//生产epub文件
+	err = c.WriteTo(book, e)
+	if err != nil {
+		return err
+	}
 	return err
 }
 
@@ -72,9 +87,7 @@ func (c *epubConverter) parse(book *Book) (*goepub.Epub, error) {
 	if err != nil {
 		return nil, fmt.Errorf("打开文件失败:%s - %w", book.Filename, err)
 	}
-	defer func() {
-		_ = f.Close()
-	}()
+	defer util.SaleClose(f)
 	e, err := goepub.NewEpub("")
 	if err != nil {
 		return nil, fmt.Errorf("创建 EPUB 失败:%w", err)
@@ -179,7 +192,7 @@ func (c *epubConverter) parse(book *Book) (*goepub.Epub, error) {
 
 func (c *epubConverter) setCover(book *Book, e *goepub.Epub) error {
 	cover := book.Cover
-	if isURLorFTP(book.Cover) {
+	if util.IsURL(book.Cover) {
 		log.Printf("使用网络图片作为封面 -> %s", book.Cover)
 		req, err := http.NewRequest(http.MethodGet, book.Cover, nil)
 		if err != nil {
@@ -198,9 +211,7 @@ func (c *epubConverter) setCover(book *Book, e *goepub.Epub) error {
 			log.Printf("网络请求失败 -> %s", resp.Status)
 			return fmt.Errorf("网络请求失败")
 		}
-		defer func(Body io.ReadCloser) {
-			_ = resp.Body.Close()
-		}(resp.Body)
+		defer util.SaleClose(resp.Body)
 
 		cover = filepath.Join(os.TempDir(), fmt.Sprintf("%d.jpg", time.Now().UnixNano()))
 		f, err := os.Create(cover)
@@ -209,7 +220,7 @@ func (c *epubConverter) setCover(book *Book, e *goepub.Epub) error {
 			return err
 		} else {
 			_, _ = io.Copy(f, resp.Body)
-			_ = f.Close()
+			util.SaleClose(f)
 		}
 	}
 	cover, err := e.AddImage(cover, filepath.Base(cover))
@@ -228,20 +239,4 @@ func (c *epubConverter) setCover(book *Book, e *goepub.Epub) error {
 
 func NewEPUBConverter() Converter {
 	return &epubConverter{}
-}
-
-// 判断是否是网络地址
-func isURLorFTP(input string) bool {
-	parsedURL, err := url.Parse(input)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-		return false
-	}
-	// 常见协议判断
-	supportedSchemes := []string{"http", "https", "ftp"}
-	for _, scheme := range supportedSchemes {
-		if strings.EqualFold(parsedURL.Scheme, scheme) {
-			return true
-		}
-	}
-	return false
 }
