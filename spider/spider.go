@@ -2,12 +2,8 @@ package spider
 
 import (
 	"context"
-	"fmt"
-	"path/filepath"
 
-	"github.com/BurntSushi/toml"
-
-	"github.com/lifei6671/gotexttoepub/internal/util"
+	"github.com/PuerkitoBio/goquery"
 )
 
 var DefaultHeader = map[string]string{
@@ -17,63 +13,6 @@ var DefaultHeader = map[string]string{
 	"User-Agent":      "Mozilla/5.0 (iPhone;CPU iPhone OS 9_1 like Mac OS X) AppleWebKit/601.1.46 (KHTML, like Gecko)Version/9.0 Mobile/13B143 Safari/601.1 (compatible; Baiduspider-render/2.0;+http://www.baidu.com/search/spider.html)",
 }
 
-type NovelSource struct {
-	Includes []string `toml:"includes"`
-}
-
-type Selector struct {
-	Selector string `toml:"selector"`
-	Attr     string `toml:"attr"`
-}
-
-// BookRule 小说抓取规则
-type BookRule struct {
-	RuleName string `toml:"rule_name"`
-	//小说元数据
-	Metadata MetadataRule `toml:"metadata"`
-	//小说章节
-	Chapter ChapterRule `toml:"chapter"`
-	//小说内容
-	Content ContentRule `toml:"content"`
-}
-
-// MetadataRule 小说元数据抓取规则
-type MetadataRule struct {
-	// 小说名称抓取规则
-	NameRegexp Selector `toml:"name_regexp"`
-	// 小说作者
-	AuthorRegexp Selector `toml:"author_regexp"`
-	// 小说简介
-	IntroRegexp Selector `toml:"intro_regexp"`
-	// 小说分类
-	CategoryRegexp Selector `toml:"category_regexp"`
-	// 小说封面
-	CoverRegexp Selector `toml:"cover_regexp"`
-}
-
-// ChapterRule 小说章节抓取规则
-type ChapterRule struct {
-	// 章节是否开启了分页
-	IsPagination bool `toml:"is_pagination"`
-	// 如果开启了分页分页抓取规则
-	PaginationRegexp Selector `json:"pagination_regexp"`
-	// 章节列表抓取规则
-	CatalogRegexp Selector `toml:"catalog_regexp"`
-}
-
-// ContentRule 小说内容抓取规则
-type ContentRule struct {
-	// 小说内容是否开启了分页
-	IsPagination bool `toml:"is_pagination"`
-	// 如果开启了分页，分页的抓取规则
-	PaginationRegexp string `json:"pagination_regexp"`
-	// 内容的抓取规则
-	ContentRegexp string `toml:"content_regexp"`
-	// 需要过滤的文本
-	FilterText []string `toml:"filter_text"`
-	// 需要过滤的html标签名称
-	FilterHTML []string `toml:"filter_html"`
-}
 type Book struct {
 	// 标题
 	Name string `json:"name"`
@@ -113,35 +52,6 @@ type Chapter struct {
 	Content string `json:"content"`
 	// 小说源地址
 	URL string `json:"url"`
-}
-
-// LoadRule 解析配置
-func LoadRule(source string) ([]*BookRule, error) {
-	sourcePath, err := filepath.Abs(source)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve path %s: %w", source, err)
-	}
-	var v NovelSource
-	_, dErr := toml.DecodeFile(sourcePath, &v)
-	if dErr != nil {
-		return nil, fmt.Errorf("decode file failed %s:%w", sourcePath, dErr)
-	}
-	baseDir := filepath.Dir(sourcePath)
-
-	var rules []*BookRule
-	for _, p := range v.Includes {
-		filename, pErr := util.ResolvePath(baseDir, p)
-		if pErr != nil {
-			return nil, fmt.Errorf("failed to resolve path %s: %w", source, err)
-		}
-		var obj BookRule
-		_, rErr := toml.DecodeFile(filename, &obj)
-		if rErr != nil {
-			return nil, fmt.Errorf("read config file err: %s - %w", p, rErr)
-		}
-		rules = append(rules, &obj)
-	}
-	return rules, nil
 }
 
 // Metadata 小说元数据
@@ -187,4 +97,16 @@ type Spider interface {
 	// CrawlContent 住区指定小说内容
 	CrawlContent(ctx context.Context, urlStr string, rule *ContentRule) (string, error)
 	Name() string
+}
+
+// ExecSelector 批量执行选择器
+func ExecSelector(doc *goquery.Document, selectors []Selector) *goquery.Selection {
+	selection := doc.Find("body")
+	for _, selector := range selectors {
+		selection = selection.Find(selector.Selector)
+		if selector.Index >= 0 {
+			selection = selection.Eq(selector.Index)
+		}
+	}
+	return selection
 }

@@ -63,6 +63,9 @@ func ResolvePath(baseDir string, path string) (string, error) {
 
 // ResolveFullURL 解析相对路径并补全为完整的 URL
 func ResolveFullURL(baseURL, relativePath string) (string, error) {
+	if relativePath == "" || strings.HasPrefix(strings.ToLower(relativePath), "javascript:") {
+		return "", fmt.Errorf("无效的 href: %s", relativePath)
+	}
 	// 解析相对路径
 	relative, err := url.Parse(relativePath)
 	if err != nil {

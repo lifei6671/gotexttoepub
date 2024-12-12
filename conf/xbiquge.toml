@@ -17,15 +17,15 @@ cover_regexp = { selector = "meta[property=\"og:image\"]", attr = "content"}
 #是否开启分页
 is_pagination = false
 #如果存在分页，获取分页的html表达式
-pagination_regexp = {}
+pagination_regexp = []
 #小说章节列表html属性表达式
-catalog_regexp = { selector = ".main > .chapterlist:nth-of-type(n+4) > ul > li > a" , attr = ""}
+catalog_regexp = [{ selector = ".main > .chapterlist", index = 1}, { selector = "ul > li > a", index = -1}]
 
 [content]
 #是否开启分页
 is_pagination = false
 #如果存在分页，获取分页的html表达式
-pagination_regexp = ""
-content_regexp = "#content"
+pagination_regexp = []
+content_regexp = [{selector = "#content", index = 0}]
 filter_text = []
 filter_html = ["div","p","script"]
