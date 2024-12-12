@@ -10,12 +10,25 @@ import (
 	"github.com/lifei6671/gotexttoepub/internal/util"
 )
 
+var DefaultHeader = map[string]string{
+	"Accept":          "text/html, application/xhtml+xml",
+	"Accept-Encoding": "gzip, deflate",
+	"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6,mt;q=0.5,ru;q=0.4,de;q=0.3",
+	"User-Agent":      "Mozilla/5.0 (iPhone;CPU iPhone OS 9_1 like Mac OS X) AppleWebKit/601.1.46 (KHTML, like Gecko)Version/9.0 Mobile/13B143 Safari/601.1 (compatible; Baiduspider-render/2.0;+http://www.baidu.com/search/spider.html)",
+}
+
 type NovelSource struct {
 	Includes []string `toml:"includes"`
 }
 
+type Selector struct {
+	Selector string `toml:"selector"`
+	Attr     string `toml:"attr"`
+}
+
 // BookRule 小说抓取规则
 type BookRule struct {
+	RuleName string `toml:"rule_name"`
 	//小说元数据
 	Metadata MetadataRule `toml:"metadata"`
 	//小说章节
@@ -26,20 +39,16 @@ type BookRule struct {
 
 // MetadataRule 小说元数据抓取规则
 type MetadataRule struct {
-	// 小说规则名称
-	RuleName string `toml:"rule_name"`
-	// 小说链接
-	URL string `toml:"url"`
 	// 小说名称抓取规则
-	NameRegexp string `toml:"name_regexp"`
+	NameRegexp Selector `toml:"name_regexp"`
 	// 小说作者
-	AuthorRegexp string `toml:"author_regexp"`
+	AuthorRegexp Selector `toml:"author_regexp"`
 	// 小说简介
-	IntroRegexp string `toml:"intro_regexp"`
+	IntroRegexp Selector `toml:"intro_regexp"`
 	// 小说分类
-	CategoryRegexp string `toml:"category_regexp"`
+	CategoryRegexp Selector `toml:"category_regexp"`
 	// 小说封面
-	CoverRegexp string `toml:"cover_regexp"`
+	CoverRegexp Selector `toml:"cover_regexp"`
 }
 
 // ChapterRule 小说章节抓取规则
@@ -47,9 +56,9 @@ type ChapterRule struct {
 	// 章节是否开启了分页
 	IsPagination bool `toml:"is_pagination"`
 	// 如果开启了分页分页抓取规则
-	PaginationRegexp string `json:"pagination_regexp"`
+	PaginationRegexp Selector `json:"pagination_regexp"`
 	// 章节列表抓取规则
-	CatalogRegexp string `toml:"catalog_regexp"`
+	CatalogRegexp Selector `toml:"catalog_regexp"`
 }
 
 // ContentRule 小说内容抓取规则
@@ -141,6 +150,8 @@ type Metadata struct {
 	Name string `json:"name"`
 	// 作者
 	Author string `json:"author"`
+	// 小说分类
+	Category string `json:"category"`
 	// 小说原地址
 	URL string `json:"url"`
 	// 封面

@@ -1,4 +1,4 @@
-rule_name="www.01xs.com"
+rule_name="m.axrss.com"
 [metadata]
 #书名的html属性表达式
 name_regexp = { selector = "meta[property=\"og:novel:book_name\"]", attr = "content" }

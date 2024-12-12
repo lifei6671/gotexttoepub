@@ -11,10 +11,14 @@ require (
 )
 
 require (
+	github.com/PuerkitoBio/goquery v1.10.0 // indirect
+	github.com/andybalholm/cascadia v1.3.2 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.5 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.7 // indirect
+	github.com/go-resty/resty/v2 v2.16.2 // indirect
 	github.com/gofrs/uuid/v5 v5.3.0 // indirect
 	github.com/gopherjs/gopherjs v1.17.2 // indirect
+	github.com/jarcoal/httpmock v1.3.1 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/smarty/assertions v1.16.0 // indirect

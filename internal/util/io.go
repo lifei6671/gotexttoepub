@@ -4,9 +4,25 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+var isTestFunc = sync.OnceValue(func() bool {
+	for _, arg := range os.Args {
+		if len(arg) > 6 && arg[:6] == "-test." {
+			return true
+		}
+	}
+	return false
+})
+
+// IsInTest 判断是否在单元测试环境中运行
+func IsInTest() bool {
+	return isTestFunc()
+}
 
 // SaleClose 安全的关闭
 func SaleClose(c io.Closer) {
@@ -43,4 +59,27 @@ func ResolvePath(baseDir string, path string) (string, error) {
 		return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
 	}
 	return absPath, nil
+}
+
+// ResolveFullURL 解析相对路径并补全为完整的 URL
+func ResolveFullURL(baseURL, relativePath string) (string, error) {
+	// 解析相对路径
+	relative, err := url.Parse(relativePath)
+	if err != nil {
+		return "", fmt.Errorf("解析 relativePath 失败: %w", err)
+	}
+
+	// 如果 relativePath 是完整的 URL，直接返回
+	if relative.IsAbs() {
+		return relative.String(), nil
+	}
+
+	// 解析 baseURL
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("解析 baseURL 失败: %w", err)
+	}
+
+	// 将相对路径补全为完整路径
+	return base.ResolveReference(relative).String(), nil
 }
