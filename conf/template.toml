@@ -1,0 +1,38 @@
+rule_name="www.shuhaige.net"
+[metadata]
+#书名的html属性表达式
+name_regexp = { selector = "meta[property=\"og:novel:book_name\"]", attr = "content" }
+
+#作者的html属性表达式
+author_regexp = { selector = "meta[property=\"og:novel:author\"]" , attr = "content"}
+#简介的html属性表达式
+intro_regexp = { selector = "meta[property=\"og:description\"]" , attr = "content", filter = ["书海阁小说网免费提供作者(杀虫队队员)的经典小说：《十日终焉》最新章节全文阅读服务,本站更新及时,无弹窗广告,欢迎光临(www.shuhaige.net)观看小说:（不后宫，不套路，不无敌，不系统，不无脑，不爽文，介意者慎入。）"]}
+#小说分类的html表达式
+category_regexp = {selector = "meta[property=\"og:novel:category\"]",attr = "content"}
+#小说封面的属性表达式
+cover_regexp = { selector = "meta[property=\"og:image\"]", attr = "content"}
+
+
+[chapter]
+#是否开启分页
+is_pagination = true
+#如果存在分页，获取分页的html表达式
+pagination_regexp = []
+#小说章节列表html属性表达式
+catalog_regexp = [{ selector = "#list > dl > dd:nth-child(1n+14) > a" , index = -1}]
+
+[content]
+#是否开启分页
+is_pagination = true
+#如果存在分页，获取分页的html表达式
+pagination_regexp.selector_group = [ {selector = ".bottem2 > #A3", index = 2}]
+#分页结束的标记
+pagination_regexp.end_text = "下一章"
+
+content_regexp = [ {selector = "#content>p" , index = -1} ]
+filter_text = ["这章没有结束，请点击下一页继续阅读！","小主，这个章节后面还有哦，请点击下一页继续阅读，后面更精彩！","本小章还未完，请点击下一页继续阅读后面精彩内容！","喜欢十日终焉请大家收藏：(www.shuhaige.net)十日终焉书海阁小说网更新速度全网最快。"]
+filter_html = ["div","p","script"]
+#是否跳过解析异常的章节
+skip_err = true
+#每次抓取后等待时间，防止被拉黑,单位毫秒
+wait_time = 300

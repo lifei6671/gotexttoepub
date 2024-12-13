@@ -1,5 +1,6 @@
 #包含由多个规则组成的数组
 includes = [
     "./xbiquge.toml",
-    "./axrss.toml"
+    "./axrss.toml",
+    "./shuhaige.toml"
 ]

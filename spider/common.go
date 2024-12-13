@@ -48,15 +48,20 @@ func (x *common) CrawlMetadata(ctx context.Context, urlStr string, rule *Metadat
 		return nil, fmt.Errorf("parse html failed:%w", nErr)
 	}
 	findFn := func(selector Selector) string {
+		text := ""
 		if selector.Selector != "" {
 			node := doc.Find(selector.Selector)
 			if selector.Attr != "" {
-				return strings.TrimSpace(node.AttrOr(selector.Attr, ""))
+				text = strings.TrimSpace(node.AttrOr(selector.Attr, ""))
 			} else {
-				return strings.TrimSpace(node.Text())
+				text = strings.TrimSpace(node.Text())
 			}
+
 		}
-		return ""
+		for _, s := range selector.Filter {
+			text = strings.ReplaceAll(text, s, "")
+		}
+		return text
 	}
 	metadata := &Metadata{
 		Name:        findFn(rule.NameRegexp),
@@ -189,8 +194,18 @@ func (x *common) parseContent(ctx context.Context, urlStr string, b *strings.Bui
 	}
 	var f func(*strings.Builder, *html.Node)
 	f = func(buf *strings.Builder, n *html.Node) {
+
 		if n.Type == html.TextNode {
-			buf.WriteString(n.Data)
+			text := strings.Trim(n.Data, " ")
+			for _, s := range rule.FilterText {
+				text = strings.ReplaceAll(text, s, "")
+			}
+			if text != "" {
+				buf.WriteString(text)
+				if !strings.HasSuffix(text, "\n") {
+					buf.WriteByte('\n')
+				}
+			}
 		}
 		if n.FirstChild != nil {
 			for c := n.FirstChild; c != nil; c = c.NextSibling {

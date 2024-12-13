@@ -1,0 +1,39 @@
+rule_name="www.ntianxies.com"
+[metadata]
+#书名的html属性表达式
+name_regexp = { selector = "meta[property=\"og:novel:book_name\"]", attr = "content" }
+
+#作者的html属性表达式
+author_regexp = { selector = "meta[property=\"og:novel:author\"]" , attr = "content"}
+#简介的html属性表达式
+intro_regexp = { selector = "meta[property=\"og:description\"]" , attr = "content"}
+#小说分类的html表达式
+category_regexp = {selector = "meta[property=\"og:novel:category\"]",attr = "content"}
+#小说封面的属性表达式
+cover_regexp = { selector = "meta[property=\"og:image\"]", attr = "content"}
+
+
+[chapter]
+#是否开启分页
+is_pagination = false
+#如果存在分页，获取分页的html表达式
+pagination_regexp = []
+#小说章节列表html属性表达式
+catalog_regexp = [{ selector = ".recommend" , index = 1},{ selector = ".directoryArea > p > a", index = -1}]
+
+[content]
+#是否开启分页
+is_pagination = true
+#如果存在分页，获取分页的html表达式
+pagination_regexp.selector_group = [ {selector = ".Readpage", index = 2},{selector = "#pt_next", index = -1}]
+#分页结束的标记
+pagination_regexp.end_text = "下一章"
+
+
+content_regexp = [ {selector = "#article>p" , index = -1} ]
+filter_text = []
+filter_html = ["div","p","script"]
+#是否跳过解析异常的章节
+skip_err = true
+#每次抓取后等待时间，防止被拉黑,单位毫秒
+wait_time = 300

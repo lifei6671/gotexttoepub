@@ -51,7 +51,7 @@ func (b *Book) Text() string {
 			_, _ = fmt.Fprintf(s, "%s\n\n", vol.Title)
 		}
 		for _, catalog := range vol.Chapters {
-			_, _ = fmt.Fprintf(s, "%s\n\n%s\n\n", catalog.Title, strings.ReplaceAll(catalog.Content, "\n", "\n "))
+			_, _ = fmt.Fprintf(s, "%s\n\n %s\n\n", catalog.Title, strings.ReplaceAll(catalog.Content, "\n", "\n "))
 		}
 	}
 	return s.String()

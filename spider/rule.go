@@ -17,9 +17,10 @@ type NovelSource struct {
 }
 
 type Selector struct {
-	Selector string `toml:"selector"`
-	Index    int    `toml:"index"`
-	Attr     string `toml:"attr"`
+	Selector string   `toml:"selector"`
+	Index    int      `toml:"index"`
+	Attr     string   `toml:"attr"`
+	Filter   []string `toml:"filter"`
 }
 
 // BookRule 小说抓取规则
