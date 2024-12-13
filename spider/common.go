@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/go-resty/resty/v2"
 	"github.com/jarcoal/httpmock"
+	"golang.org/x/net/html"
 
 	"github.com/lifei6671/gotexttoepub/internal/util"
 )
@@ -154,6 +156,7 @@ func (x *common) CrawlContent(ctx context.Context, urlStr string, rule *ContentR
 		if nextStr == "" {
 			return b.String(), nil
 		}
+		log.Println("正在处理下一页：", nextStr)
 	}
 }
 
@@ -184,26 +187,43 @@ func (x *common) parseContent(ctx context.Context, urlStr string, b *strings.Bui
 	if nErr != nil {
 		return "", fmt.Errorf("parse html failed:%w", nErr)
 	}
+	var f func(*strings.Builder, *html.Node)
+	f = func(buf *strings.Builder, n *html.Node) {
+		if n.Type == html.TextNode {
+			buf.WriteString(n.Data)
+		}
+		if n.FirstChild != nil {
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				f(buf, c)
+			}
+		}
+	}
+
 	for _, selection := range ExecSelector(doc, rule.ContentRegexp).EachIter() {
 		for _, filterHtml := range rule.FilterHTML {
 			// 删除指定的标签
 			_ = selection.RemoveFiltered(filterHtml)
 		}
-		s := strings.TrimSpace(selection.Text())
-		if s != "" {
-			for _, text := range rule.FilterText {
-				s = strings.ReplaceAll(s, text, "")
-			}
-			_, _ = b.WriteString(s)
+		for _, node := range selection.Nodes {
+			f(b, node)
 		}
 	}
 
 	nextURLStr := ""
 	if rule.IsPagination {
-		uStr := ExecSelector(doc, rule.PaginationRegexp).AttrOr("href", "")
-		//将相对路径转换为绝对路径
-		if fullURL, fErr := util.ResolveFullURL(urlStr, uStr); fErr == nil {
-			nextURLStr = fullURL
+		isEnd := false
+		if rule.PaginationRegexp.EndText != "" {
+			text := ExecSelector(doc, rule.PaginationRegexp.SelectorGroup).Text()
+			if strings.Contains(rule.PaginationRegexp.EndText, text) {
+				isEnd = true
+			}
+		}
+		if !isEnd {
+			uStr := ExecSelector(doc, rule.PaginationRegexp.SelectorGroup).AttrOr("href", "")
+			//将相对路径转换为绝对路径
+			if fullURL, fErr := util.ResolveFullURL(urlStr, uStr); fErr == nil {
+				nextURLStr = fullURL
+			}
 		}
 	}
 	return nextURLStr, nil

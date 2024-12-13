@@ -2,6 +2,8 @@ package spider
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -26,6 +28,8 @@ type Book struct {
 	Volumes []Volume `json:"volumes"`
 	// 封面
 	Cover string `json:"cover"`
+	// 分类
+	Category string `json:"category"`
 	// 语言
 	Lang string `json:"lang"`
 	// 简介
@@ -34,6 +38,23 @@ type Book struct {
 	Publisher string `json:"publisher"`
 	// 出版日期
 	PublishDate string `json:"publish_date"`
+}
+
+func (b *Book) Text() string {
+	s := &strings.Builder{}
+	_, _ = fmt.Fprintln(s, b.Name)
+	_, _ = fmt.Fprintf(s, "作者：%s\n\n", b.Author)
+	_, _ = fmt.Fprintf(s, "简介：%s\n\n", b.Intro)
+
+	for _, vol := range b.Volumes {
+		if vol.Title != "" {
+			_, _ = fmt.Fprintf(s, "%s\n\n", vol.Title)
+		}
+		for _, catalog := range vol.Chapters {
+			_, _ = fmt.Fprintf(s, "%s\n\n%s\n\n", catalog.Title, strings.ReplaceAll(catalog.Content, "\n", "\n "))
+		}
+	}
+	return s.String()
 }
 
 // Volume 卷的结构

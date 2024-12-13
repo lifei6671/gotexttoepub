@@ -25,7 +25,7 @@ catalog_regexp = [{ selector = ".main > .chapterlist", index = 1}, { selector = 
 #是否开启分页
 is_pagination = false
 #如果存在分页，获取分页的html表达式
-pagination_regexp = []
+pagination_regexp = {}
 content_regexp = [{selector = "#content", index = 0}]
 filter_text = []
 filter_html = ["div","p","script"]

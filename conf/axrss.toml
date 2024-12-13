@@ -25,7 +25,11 @@ catalog_regexp = [{ selector = ".recommend" , index = 1},{ selector = ".director
 #是否开启分页
 is_pagination = true
 #如果存在分页，获取分页的html表达式
-pagination_regexp = [ {selector = ".Readpage", index = 2},{selector = "#pt_next", index = -1}]
+pagination_regexp.selector_group = [ {selector = ".Readpage", index = 2},{selector = "#pt_next", index = -1}]
+#分页结束的标记
+pagination_regexp.end_text = "下一章"
+
+
 content_regexp = [ {selector = "#article>p" , index = -1} ]
 filter_text = []
 filter_html = ["div","p","script"]

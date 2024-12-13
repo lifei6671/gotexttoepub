@@ -1,11 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"log"
 	"regexp"
 	"time"
 
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 
 	"github.com/lifei6671/gotexttoepub/goepub"
 )
@@ -46,7 +47,7 @@ var Start = &cli.Command{
 			Usage:   "提取章节标题的正则",
 		},
 	},
-	Action: func(c *cli.Context) error {
+	Action: func(ctx context.Context, c *cli.Command) error {
 
 		path := c.String("file")
 		if path == "" {

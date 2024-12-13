@@ -1,25 +1,30 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 
 	"github.com/lifei6671/gotexttoepub/cmd"
 )
 
-const APP_VERSION = "1.2"
+const AppVersion = "2.0"
 
 func main() {
-	app := &cli.App{}
-	app.Name = "gotexttoepub"
-	app.Usage = "A Txt convert epub application."
-	app.Version = APP_VERSION
-	app.Commands = []*cli.Command{
-		cmd.Start,
+
+	app := &cli.Command{
+		Name:                  "gotexttoepub",
+		Usage:                 "一个简单的小说抓取和转换程序",
+		Version:               AppVersion,
+		EnableShellCompletion: true,
+		Commands: []*cli.Command{
+			cmd.Start,
+			cmd.Crawler,
+		},
 	}
-	err := app.Run(os.Args)
+	err := app.Run(context.TODO(), os.Args)
 	if err != nil {
 		log.Fatalf("启动命令行失败 -> %s", err)
 	}

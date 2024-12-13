@@ -2,12 +2,15 @@ package spider
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/lifei6671/gotexttoepub/internal/util"
 )
+
+var DefaultRule *BookRuleSet
 
 type NovelSource struct {
 	Includes []string `toml:"includes"`
@@ -59,7 +62,10 @@ type ContentRule struct {
 	// 小说内容是否开启了分页
 	IsPagination bool `toml:"is_pagination"`
 	// 如果开启了分页，分页的抓取规则
-	PaginationRegexp []Selector `toml:"pagination_regexp"`
+	PaginationRegexp struct {
+		SelectorGroup []Selector `toml:"selector_group"`
+		EndText       string     `toml:"end_text"`
+	} `toml:"pagination_regexp"`
 	// 内容的抓取规则
 	ContentRegexp []Selector `toml:"content_regexp"`
 	SkipErr       bool       `toml:"skip_err"`
@@ -115,4 +121,20 @@ func LoadRule(source string) (*BookRuleSet, error) {
 		set.rules[obj.RuleName] = obj
 	}
 	return &set, nil
+}
+
+func InitRule(source string) error {
+	var err error
+	DefaultRule, err = LoadRule(source)
+	if err != nil {
+		log.Println(err)
+	}
+	return err
+}
+
+func init() {
+	err := InitRule("./conf/source.toml")
+	if err != nil {
+		panic(err)
+	}
 }

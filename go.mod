@@ -22,6 +22,7 @@ require (
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/smarty/assertions v1.16.0 // indirect
+	github.com/urfave/cli/v3 v3.0.0-beta1 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	golang.org/x/net v0.32.0 // indirect
 )
