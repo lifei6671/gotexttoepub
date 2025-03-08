@@ -132,7 +132,7 @@ func (e *epub) run(style string) error {
 	// 行处理
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		line := scanner.Text()
 		if line == "" {
 			continue
 		}
@@ -185,7 +185,7 @@ func (e *epub) run(style string) error {
 			continue
 		}
 		// 排除一些特殊章节
-		if line == "楔子" || line == "卷首语" || line == "序" || line == "楔子语" || strings.HasPrefix(line, "简介") || strings.HasPrefix(line, "内容简介") {
+		if line == "楔子" || line == "卷首语" || line == "序" || line == "完本感言" || line == "楔子语" || strings.HasPrefix(line, "简介") || strings.HasPrefix(line, "内容简介") {
 			if currentVol == nil {
 				currentVol = &Volume{}
 			}
@@ -211,7 +211,7 @@ func (e *epub) run(style string) error {
 		}
 		if currentCh != nil {
 			// 章节内容
-			lineText := strings.ReplaceAll(strings.ReplaceAll(line, "<", "&lt;"), ">", "&gt;")
+			lineText := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(line, "<", "&lt;"), ">", "&gt;"))
 			currentCh.Content.WriteString("<p style=\"text-indent:2em\">" + lineText + "</p>\n")
 		}
 
@@ -229,8 +229,8 @@ func (e *epub) run(style string) error {
 		for i, vol := range volumes {
 			parentFilename := ""
 			if vol.Title != "" {
-				internalFilename := fmt.Sprintf("volume%d.xhtml", i)
-				parentFilename, err = e.AddSection(fmt.Sprintf("<h1>%s</h1>", vol.Title), vol.Title, internalFilename, style)
+				//internalFilename := fmt.Sprintf("volume%d.xhtml", i)
+				parentFilename, err = e.AddSection(fmt.Sprintf("<h1>%s</h1>", vol.Title), vol.Title, "", style)
 				if err != nil {
 					log.Printf("添加卷失败 -> %v", err)
 					return err
@@ -241,8 +241,9 @@ func (e *epub) run(style string) error {
 				if i == 0 && j == 0 && vol.Title == "" && e.reg != nil && !e.reg.MatchString(ch.Title) {
 					e.SetDescription(removeHTMLTags(ch.Content.String()))
 				}
-				chapterFilename := fmt.Sprintf("volume%d_chapter%d.xhtml", i, j)
-				_, err = e.AddSubSection(parentFilename, fmt.Sprintf("<h2>%s</h2>%s", ch.Title, ch.Content.String()), ch.Title, chapterFilename, style)
+
+				//chapterFilename := fmt.Sprintf("volume%d_chapter%d.xhtml", i, j)
+				_, err = e.AddSubSection(parentFilename, fmt.Sprintf("<h2>%s</h2>%s", ch.Title, ch.Content.String()), ch.Title, "", style)
 				if err != nil {
 					log.Printf("添加章节失败 ->卷：%s - 章: %s - 错误: %v", vol.Title, ch.Title, err)
 					return err

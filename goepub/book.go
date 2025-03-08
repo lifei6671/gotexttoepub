@@ -10,13 +10,13 @@ import (
 
 // 文件解析规则的正则表达式
 var (
-	TitlePattern   = `^\S+.*$`                               // 第一个非空白行是标题
-	AuthorPattern  = `^作者[:：](.*)$`                          // 第二个非空白行或以“作者”开头的是作者
-	IntroPattern   = `^(内容简介|简介|楔子|引子|序|序言)$`                // 内容简介/简介/楔子
-	VolumePattern  = `^(第[一二三四五六七八九十百零0-9]+(卷|部|集)).{0,30}$` // 卷标题
-	ChapterPattern = `^(第[一二三四五六七八九十百零0-9]+(章|回|节)).{0,30}$` // 章节标题
-	ExtraPattern   = `^番外.{0,30}$`                           // 番外部分
-	ParagraphStart = "<p style=\"text-indent: 2em;\">"       // 段落开始
+	TitlePattern   = `^\S+.*$`                                          // 第一个非空白行是标题
+	AuthorPattern  = `^作者[:：](.*)$`                                     // 第二个非空白行或以“作者”开头的是作者
+	IntroPattern   = `^(内容简介|简介|楔子|引子|序|序言)$`                           // 内容简介/简介/楔子
+	VolumePattern  = `^(第[一二三四五六七八九十百零0-9]+(卷|部|集)).{0,30}$`            // 卷标题
+	ChapterPattern = `^((第[一二三四五六七八九十百千万零0-9]+(章|回|节))|(完本感言)).{0,40}$` // 章节标题
+	ExtraPattern   = `^番外.{0,30}$`                                      // 番外部分
+	ParagraphStart = "<p style=\"text-indent: 2em;\">"                  // 段落开始
 	ParagraphEnd   = "</p>"
 )
 
