@@ -2,5 +2,5 @@
 includes = [
     "./xbiquge.toml",
     "./axrss.toml",
-    "./shuhaige.toml"
+    "./zhenhunxiaoshuo.toml"
 ]

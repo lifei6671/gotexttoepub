@@ -1,0 +1,31 @@
+rule_name="www.zhenhunxiaoshuo.com"
+[metadata]
+#书名的html属性表达式
+name_regexp = { selector = "h1.focusbox-title", attr = ""}
+
+#作者的html属性表达式
+author_regexp = { selector = "meta[name=\"keywords\"]" , attr = "content",filter = []}
+#简介的html属性表达式
+intro_regexp = { selector = "div.focusbox-text>p" , attr = ""}
+#小说分类的html表达式
+category_regexp = {selector = "",attr = ""}
+#小说封面的属性表达式
+cover_regexp = { selector = "", attr = ""}
+
+
+[chapter]
+#是否开启分页
+is_pagination = false
+#如果存在分页，获取分页的html表达式
+pagination_regexp = []
+#小说章节列表html属性表达式
+catalog_regexp = [{ selector = "div.excerpts", index = 0}, { selector = "a", index = -1 }]
+
+[content]
+#是否开启分页
+is_pagination = false
+#如果存在分页，获取分页的html表达式
+pagination_regexp = {}
+content_regexp = [{selector = "article.article-content", index = 0}]
+filter_text = []
+filter_html = ["div","p","script"]

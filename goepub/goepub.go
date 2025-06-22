@@ -158,7 +158,7 @@ func (e *epub) run(style string) error {
 		}
 
 		// 判断卷标题
-		if e.volume != nil && e.volume.MatchString(line) {
+		if e.volume != nil && (e.volume.MatchString(line) || line == "番外") {
 			if currentCh != nil && currentVol != nil {
 				currentVol.Chapters = append(currentVol.Chapters, *currentCh)
 				currentCh = nil
@@ -172,7 +172,7 @@ func (e *epub) run(style string) error {
 			continue
 		}
 		// 判断章节
-		if e.reg != nil && e.reg.MatchString(line) {
+		if e.reg != nil && (e.reg.MatchString(line) || regexp.MustCompile(ExtraPattern).MatchString(line)) {
 			if currentVol == nil {
 				currentVol = &Volume{}
 			}
