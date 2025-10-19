@@ -63,8 +63,8 @@ var Crawler = &cli.Command{
 	Action: func(ctx context.Context, c *cli.Command) error {
 		param := &spider.CrawlerParams{
 			ChapterURL:   c.String("url"),
-			ChapterStart: c.Int("start-chapter"),
-			ChapterEnd:   c.Int("end-chapter"),
+			ChapterStart: c.Int64("start-chapter"),
+			ChapterEnd:   c.Int64("end-chapter"),
 			RuleName:     c.String("rule-name"),
 		}
 		if param.RuleName == "" {
