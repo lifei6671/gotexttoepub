@@ -13,11 +13,14 @@ import (
 )
 
 // RulesCommand 提供规则配置相关的辅助命令。
-var RulesCommand = &cli.Command{
-	Name:        "rules",
-	Usage:       "查看规则文件与可用渠道",
-	Description: "列出当前规则文件中的可用渠道，方便在转换前选择 rule-channel。",
-	Subcommands: []*cli.Command{
+var RulesCommand = newRulesCommand()
+
+func newRulesCommand() *cli.Command {
+	return &cli.Command{
+		Name:        "rules",
+		Usage:       "查看规则文件与可用渠道",
+		Description: "列出当前规则文件中的可用渠道，方便在转换前选择 rule-channel。",
+		Subcommands: []*cli.Command{
 		{
 			Name:  "channels",
 			Usage: "列出可用规则渠道",
@@ -148,7 +151,8 @@ var RulesCommand = &cli.Command{
 				return nil
 			},
 		},
-	},
+		},
+	}
 }
 
 func printRuleField(writer io.Writer, name string, value string) {

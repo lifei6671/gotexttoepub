@@ -28,7 +28,7 @@ author_regex = "^番茄作者[:：](.*)$"
 
 	var buffer bytes.Buffer
 	app := &cli.App{
-		Commands: []*cli.Command{RulesCommand},
+		Commands: []*cli.Command{newRulesCommand()},
 		Writer:   &buffer,
 	}
 
@@ -63,7 +63,7 @@ chapter_regex = "^第[0-9]+章.*$"
 
 	var buffer bytes.Buffer
 	app := &cli.App{
-		Commands: []*cli.Command{RulesCommand},
+		Commands: []*cli.Command{newRulesCommand()},
 		Writer:   &buffer,
 	}
 
@@ -99,7 +99,7 @@ chapter_regex = "^第[0-9]+章.*$"
 
 	var buffer bytes.Buffer
 	app := &cli.App{
-		Commands: []*cli.Command{RulesCommand},
+		Commands: []*cli.Command{newRulesCommand()},
 		Writer:   &buffer,
 	}
 

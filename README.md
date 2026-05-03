@@ -137,7 +137,7 @@ gotexttoepub epub \
 ```bash
 gotexttoepub epub \
   -file="~/fiction.txt" \
-  -title-regexp="^书名[:：](.*)$" \
+  -book-title-regexp="^书名[:：](.*)$" \
   -author-regexp="^作者名[:：](.*)$" \
   -chapter-regexp="^第.*?章.*$" \
   -output="~/fiction.epub"
@@ -176,7 +176,7 @@ gotexttoepub epub \
   - 封面图片路径或 URL
 - `-author`
   - 手动指定作者，留空则自动解析
-- `-title-regexp`
+- `-book-title-regexp`, `-name-regexp`
   - 书名解析正则，支持使用捕获组提取最终书名
 - `-author-regexp`
   - 作者解析正则，支持使用捕获组提取最终作者名
@@ -206,7 +206,7 @@ gotexttoepub epub \
 - `-regexr`
   - 等价于 `-chapter-regexp`
 - `-title-regexp`
-  - 等价于 `-chapter-regexp`
+  - 兼容旧版本，等价于 `-chapter-regexp`
 - `-chapter-pattern`
   - 等价于 `-chapter-regexp`
 - `-volume-pattern`

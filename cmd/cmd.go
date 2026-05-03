@@ -12,11 +12,14 @@ import (
 )
 
 // Start 是 TXT 转 EPUB 的命令入口。
-var Start = &cli.Command{
-	Name:        "epub",
-	Usage:       "将 TXT 小说转换为 EPUB",
-	Description: "按卷、章节规则解析 TXT 文件并输出 EPUB。",
-	Flags: []cli.Flag{
+var Start = newEpubCommand()
+
+func newEpubCommand() *cli.Command {
+	return &cli.Command{
+		Name:        "epub",
+		Usage:       "将 TXT 小说转换为 EPUB",
+		Description: "按卷、章节规则解析 TXT 文件并输出 EPUB。",
+		Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:     "file",
 			Aliases:  []string{"f"},
@@ -33,8 +36,9 @@ var Start = &cli.Command{
 			Usage: "作者，留空则自动解析",
 		},
 		&cli.StringFlag{
-			Name:  "title-regexp",
-			Usage: "书名解析正则，支持使用捕获组提取最终书名",
+			Name:    "book-title-regexp",
+			Aliases: []string{"name-regexp"},
+			Usage:   "书名解析正则，支持使用捕获组提取最终书名",
 		},
 		&cli.StringFlag{
 			Name:  "author-regexp",
@@ -83,21 +87,22 @@ var Start = &cli.Command{
 			Aliases: []string{"vr", "volume-pattern"},
 			Usage:   "提取卷标题的正则",
 		},
-	},
-	Action: func(c *cli.Context) error {
-		book, err := buildBookFromFlags(c)
-		if err != nil {
-			return err
-		}
+		},
+		Action: func(c *cli.Context) error {
+			book, err := buildBookFromFlags(c)
+			if err != nil {
+				return err
+			}
 
-		start := time.Now()
-		if err := goepub.NewEPUBConverter().Convert(c.Context, book); err != nil {
-			return fmt.Errorf("转换文档失败: %w", err)
-		}
+			start := time.Now()
+			if err := goepub.NewEPUBConverter().Convert(c.Context, book); err != nil {
+				return fmt.Errorf("转换文档失败: %w", err)
+			}
 
-		log.Printf("转换完成,耗时 -> %s", time.Since(start).Round(time.Millisecond))
-		return nil
-	},
+			log.Printf("转换完成,耗时 -> %s", time.Since(start).Round(time.Millisecond))
+			return nil
+		},
+	}
 }
 
 // buildBookFromFlags 将命令行参数转换为统一的 Book 配置对象，
@@ -116,7 +121,7 @@ func buildBookFromFlags(c *cli.Context) (*goepub.Book, error) {
 		RuleConfigPath: c.String("rule-config"),
 	}
 
-	titlePattern := c.String("title-regexp")
+	titlePattern := c.String("book-title-regexp")
 	if titlePattern != "" {
 		titleRegex, err := regexp.Compile(titlePattern)
 		if err != nil {
