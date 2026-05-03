@@ -9,22 +9,20 @@ import (
 	"github.com/lifei6671/gotexttoepub/cmd"
 )
 
-const APP_VERSION = "1.2"
+const appVersion = "1.2"
 
+// main 负责初始化 CLI 应用并分发子命令。
 func main() {
-	app := &cli.App{}
-	app.Name = "gotexttoepub"
-	app.Usage = "A Txt convert epub application."
-	app.Version = APP_VERSION
-	app.Commands = []*cli.Command{
-		cmd.Start,
+	log.SetFlags(log.Lshortfile | log.LstdFlags)
+
+	app := &cli.App{
+		Name:     "gotexttoepub",
+		Usage:    "Convert TXT novels to EPUB files.",
+		Version:  appVersion,
+		Commands: []*cli.Command{cmd.Start, cmd.RulesCommand},
 	}
-	err := app.Run(os.Args)
-	if err != nil {
+
+	if err := app.Run(os.Args); err != nil {
 		log.Fatalf("启动命令行失败 -> %s", err)
 	}
-}
-
-func init() {
-	log.SetFlags(log.Lshortfile | log.LstdFlags)
 }

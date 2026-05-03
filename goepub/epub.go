@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -15,233 +16,459 @@ import (
 	"strings"
 	"time"
 
-	goepub "github.com/go-shiori/go-epub"
+	epublib "github.com/go-shiori/go-epub"
 )
 
+// epubConverter 是统一转换流程的 EPUB 实现。
+// 它负责串联“文本解析、元信息设置、资源注入、文件输出”四个阶段。
 type epubConverter struct{}
 
+// Convert 执行完整的 TXT -> EPUB 转换流程。
 func (c *epubConverter) Convert(ctx context.Context, book *Book) error {
-	err := book.FullDefault()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if book == nil {
+		return errors.New("book 不能为空")
+	}
+	if err := book.FullDefault(); err != nil {
+		return err
+	}
+	rules := book.parseRules
+	if len(book.Volumes) == 0 {
+		// 如果调用方没有预先提供卷章结构，就从 TXT 原文中实时解析。
+		if err := c.parse(ctx, book, rules); err != nil {
+			return err
+		}
+	}
 
-	return err
+	e, err := epublib.NewEpub(book.Name)
+	if err != nil {
+		return fmt.Errorf("创建 EPUB 失败: %w", err)
+	}
+
+	if err := c.applyMetadata(book, e); err != nil {
+		return err
+	}
+	fontCleanup, err := addEmbeddedFonts(e)
+	if err != nil {
+		return err
+	}
+	if fontCleanup != nil {
+		defer fontCleanup()
+	}
+
+	style, styleCleanup, err := addEmbeddedStyles(e)
+	if err != nil {
+		return err
+	}
+	if styleCleanup != nil {
+		defer styleCleanup()
+	}
+	if err := c.writeChapters(ctx, book, e, style); err != nil {
+		return err
+	}
+	coverCleanup, err := c.setCover(ctx, book, e)
+	if err != nil {
+		return err
+	}
+	if coverCleanup != nil {
+		defer coverCleanup()
+	}
+
+	output, err := book.OutputPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
+		return fmt.Errorf("创建输出目录失败: %w", err)
+	}
+	return e.Write(output)
 }
 
-func (c *epubConverter) WriteTo(book *Book, e *goepub.Epub) error {
+// WriteTo 将已经解析完成的卷章结构写入现有的 EPUB 对象。
+// 这个方法主要为后续扩展或测试场景保留。
+func (c *epubConverter) WriteTo(book *Book, e *epublib.Epub) error {
+	return c.writeChapters(context.Background(), book, e, "")
+}
+
+// parse 负责把 TXT 文本解析成 Book.Volumes 结构。
+// 它只关心“识别标题、作者、卷、章和正文”，不直接处理 EPUB 输出。
+func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules) error {
+	raw, err := os.ReadFile(book.Filename)
+	if err != nil {
+		return fmt.Errorf("读取文件失败: %s - %w", book.Filename, err)
+	}
+
+	text, detectedEncoding, err := decodeTextContent(raw, book.Encoding)
+	if err != nil {
+		return err
+	}
+	log.Printf("检测到文本编码: %s", detectedEncoding)
+
+	if len(book.RulePresets) == 0 && book.RulePresetMode != presetModeOff {
+		detections := DetectRulePresets(text)
+		if len(detections) > 0 {
+			names := make([]string, 0, len(detections))
+			reasonParts := make([]string, 0, len(detections))
+			for _, detected := range detections {
+				names = append(names, detected.Name)
+				reasonParts = append(reasonParts, fmt.Sprintf("%s(score=%d, hit=%s)", detected.Name, detected.Score, strings.Join(detected.Reasons, " | ")))
+			}
+
+			switch book.RulePresetMode {
+			case presetModeApply:
+				book.detectedRulePresets = names
+				rules, err = buildParseRules(book)
+				if err != nil {
+					return err
+				}
+				book.parseRules = rules
+				book.VolumeRegex = rules.VolumeRegex
+				book.ChapterRegex = rules.ChapterRegex
+				book.ExtraRegex = rules.ExtraRegex
+				book.IntroRegex = rules.IntroRegex
+				log.Printf("自动应用规则预设: %s", strings.Join(reasonParts, "; "))
+			default:
+				log.Printf("检测到推荐规则预设: %s", strings.Join(reasonParts, "; "))
+				log.Printf("如需自动应用，可使用 -rule-preset-mode=apply；如需手动指定，可使用 -rule-preset=%s", strings.Join(names, ","))
+			}
+		}
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	// 默认 Scanner 单行长度限制较小，小说正文里常见的超长段落会直接触发错误，
+	// 这里主动放大缓冲区以提升兼容性。
+	scanner.Buffer(make([]byte, 64*1024), maxScannerTokenSize)
+
+	var (
+		currentVol      *Volume
+		currentCh       *Chapter
+		introLines      []string
+		collectingIntro bool
+	)
+
+	flushChapter := func() {
+		if currentVol == nil || currentCh == nil {
+			return
+		}
+		currentVol.Chapters = append(currentVol.Chapters, *currentCh)
+		currentCh = nil
+	}
+	flushVolume := func() {
+		if currentVol == nil {
+			return
+		}
+		if len(currentVol.Chapters) == 0 && strings.TrimSpace(currentVol.Title) == "" {
+			return
+		}
+		book.Volumes = append(book.Volumes, *currentVol)
+		currentVol = nil
+	}
+
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			if collectingIntro {
+				continue
+			}
+			continue
+		}
+
+		if rules.ShouldIgnoreLine(line) {
+			continue
+		}
+
+		if book.Name == "" || book.Author == "" {
+			title, author, ok := rules.ParseInlineTitleAndAuthor(line)
+			if ok {
+				if book.Name == "" {
+					book.Name = title
+					log.Printf("小说标题: %s", book.Name)
+				}
+				if book.Author == "" {
+					book.Author = author
+					log.Printf("小说作者: %s", book.Author)
+				}
+				continue
+			}
+		}
+
+		if book.Name == "" {
+			if title, ok := rules.ParseTitle(line); ok {
+				book.Name = title
+				log.Printf("小说标题: %s", book.Name)
+				continue
+			}
+		}
+
+		if book.Author == "" {
+			if author, ok := rules.ParseAuthor(line); ok {
+				book.Author = author
+				log.Printf("小说作者: %s", book.Author)
+				continue
+			}
+		}
+
+		if book.Intro == "" {
+			if introText, ok := rules.ParsePrefixedIntro(line); ok {
+				collectingIntro = true
+				if introText != "" {
+					introLines = append(introLines, introText)
+				}
+				continue
+			}
+			if collectingIntro {
+				if rules.IsStructuralLine(line) {
+					book.Intro = strings.TrimSpace(strings.Join(introLines, "\n"))
+					collectingIntro = false
+				} else {
+					introLines = append(introLines, line)
+					continue
+				}
+			}
+		}
+
+		switch {
+		case rules.VolumeRegex != nil && rules.VolumeRegex.MatchString(line):
+			// 遇到新卷时，先收束当前章节和当前卷，再开启下一卷。
+			flushChapter()
+			flushVolume()
+			currentVol = &Volume{Title: line}
+			log.Printf("解析卷: %s", line)
+			continue
+		case rules.ChapterRegex != nil && rules.ChapterRegex.MatchString(line):
+			if currentVol == nil {
+				// 无卷小说也允许直接挂章节，因此这里自动创建匿名卷。
+				currentVol = &Volume{}
+			}
+			flushChapter()
+			currentCh = &Chapter{Title: line}
+			log.Printf("解析章节: %s", line)
+			continue
+		case rules.ExtraRegex != nil && rules.ExtraRegex.MatchString(line):
+			if currentVol == nil {
+				currentVol = &Volume{}
+			}
+			flushChapter()
+			currentCh = &Chapter{Title: line}
+			log.Printf("解析番外: %s", line)
+			continue
+		case rules.IsSpecialChapterTitle(line):
+			if currentVol == nil {
+				currentVol = &Volume{}
+			}
+			flushChapter()
+			currentCh = &Chapter{Title: line}
+			log.Printf("解析特殊章节: %s", line)
+			continue
+		}
+
+		if currentCh != nil {
+			// 普通正文仅归属到当前章节，且在写入前做 HTML 转义。
+			currentCh.Content.WriteString(formatParagraph(line))
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("扫描 TXT 文件失败: %w", err)
+	}
+
+	flushChapter()
+	flushVolume()
+
+	if book.Intro == "" && len(introLines) > 0 {
+		book.Intro = strings.TrimSpace(strings.Join(introLines, "\n"))
+	}
+	if book.Name == "" {
+		book.Name = strings.TrimSuffix(filepath.Base(book.Filename), filepath.Ext(book.Filename))
+	}
+	if book.Intro == "" {
+		book.Intro = deriveIntro(book)
+	}
+	if len(book.Volumes) == 0 {
+		return errors.New("未解析到任何章节，请检查章节正则是否正确")
+	}
+	return nil
+}
+
+// applyMetadata 将 Book 中的元信息同步到 EPUB 对象。
+func (c *epubConverter) applyMetadata(book *Book, e *epublib.Epub) error {
+	e.SetTitle(book.Name)
+	e.SetLang(book.Lang)
+	if book.Author != "" {
+		e.SetAuthor(book.Author)
+	}
+	if book.Intro != "" {
+		e.SetDescription(book.Intro)
+	}
+	return nil
+}
+
+// writeChapters 将卷章树写入 EPUB 文档结构。
+// 卷会生成父级 section，章节会作为 subsection 挂载在卷下。
+func (c *epubConverter) writeChapters(ctx context.Context, book *Book, e *epublib.Epub, style string) error {
 	if len(book.Volumes) == 0 {
 		return errors.New("卷不能为空")
 	}
-	var err error
-	// 按照卷和章生成 EPUB
+
 	for i, vol := range book.Volumes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		parentFilename := ""
 		if vol.Title != "" {
 			internalFilename := fmt.Sprintf("volume%d.xhtml", i)
-			parentFilename, err = e.AddSection(fmt.Sprintf("<h1>%s</h1>", vol.Title), vol.Title, internalFilename, "")
+			var err error
+			parentFilename, err = e.AddSection(fmt.Sprintf("<h1>%s</h1>", html.EscapeString(vol.Title)), vol.Title, internalFilename, style)
 			if err != nil {
-				log.Printf("添加卷失败 -> %v", err)
-				return err
+				return fmt.Errorf("添加卷失败 %s: %w", vol.Title, err)
 			}
 		}
+
 		for j, ch := range vol.Chapters {
-			// 如果第一个卷的第一个章节不是标题，则设置小说简介
-			if i == 0 && j == 0 && vol.Title == "" && book.IntroRegex != nil && !book.IntroRegex.MatchString(ch.Title) {
-				e.SetDescription(removeHTMLTags(ch.Content.String()))
-			}
-			chapterFilename := fmt.Sprintf("volume%d_chapter%d.xhtml", i, j)
-			_, err = e.AddSubSection(parentFilename, fmt.Sprintf("<h2>%s</h2>%s", ch.Title, ch.Content.String()), ch.Title, chapterFilename, "")
-			if err != nil {
-				log.Printf("添加章节失败 ->卷：%s - 章: %s - 错误: %v", vol.Title, ch.Title, err)
+			if err := ctx.Err(); err != nil {
 				return err
 			}
-		}
-	}
 
-	return nil
-}
-
-func (c *epubConverter) parse(book *Book) (*goepub.Epub, error) {
-	// 变量定义
-	var (
-		title      string
-		author     string
-		currentVol *Volume
-		currentCh  *Chapter
-	)
-
-	f, err := os.Open(book.Filename)
-	if err != nil {
-		return nil, fmt.Errorf("打开文件失败:%s - %w", book.Filename, err)
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-	e, err := goepub.NewEpub("")
-	if err != nil {
-		return nil, fmt.Errorf("创建 EPUB 失败:%w", err)
-	}
-	// 行处理
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		// 判断标题
-		if title == "" && regexp.MustCompile(TitlePattern).MatchString(line) {
-			title = line
-			e.SetTitle(title)
-			log.Printf("小说标题: %s", title)
-			continue
-		}
-
-		// 判断作者
-		if author == "" && regexp.MustCompile(AuthorPattern).MatchString(line) {
-			matches := regexp.MustCompile(AuthorPattern).FindStringSubmatch(line)
-			if len(matches) > 1 {
-				author = strings.TrimSpace(matches[1])
-				e.SetAuthor(author)
-				log.Printf("小说作者: %s", author)
+			chapterFilename := fmt.Sprintf("volume%d_chapter%d.xhtml", i, j)
+			body := fmt.Sprintf("<h2>%s</h2>%s", html.EscapeString(ch.Title), ch.Content.String())
+			if parentFilename == "" {
+				if _, err := e.AddSection(body, ch.Title, chapterFilename, style); err != nil {
+					return fmt.Errorf("添加章节失败 卷:%s 章:%s: %w", vol.Title, ch.Title, err)
+				}
+				continue
 			}
-			continue
-		}
-
-		// 判断卷标题
-		if book.VolumeRegex != nil && book.VolumeRegex.MatchString(line) {
-			if currentCh != nil && currentVol != nil {
-				currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-				currentCh = nil
+			if _, err := e.AddSubSection(parentFilename, body, ch.Title, chapterFilename, style); err != nil {
+				return fmt.Errorf("添加章节失败 卷:%s 章:%s: %w", vol.Title, ch.Title, err)
 			}
-			// 处理当前卷
-			if currentVol != nil {
-				book.Volumes = append(book.Volumes, *currentVol)
-			}
-			log.Printf("解析卷: %s", line)
-			currentVol = &Volume{Title: line}
-			continue
-		}
-		// 判断章节
-		if book.ChapterRegex != nil && book.ChapterRegex.MatchString(line) {
-			if currentVol == nil {
-				currentVol = &Volume{}
-			}
-			// 处理当前章节
-			if currentCh != nil && currentVol != nil {
-				currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-			}
-			log.Printf("解析章节: %s", line)
-			currentCh = &Chapter{Title: line}
-			continue
-		}
-		// 处理一些特殊章节
-		if book.ExtraRegex != nil && book.ExtraRegex.MatchString(line) {
-			if currentVol == nil {
-				currentVol = &Volume{}
-			}
-			if currentCh != nil {
-				currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-			}
-			log.Printf("解析特殊章节: %s", line)
-			currentCh = &Chapter{Title: line}
-			continue
-		}
-
-		if regexp.MustCompile(ExtraPattern).MatchString(line) {
-			// 将番外视为一个独立章节
-			if currentCh != nil && currentVol != nil {
-				currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-				currentCh = nil
-			}
-			if currentVol == nil {
-				currentVol = &Volume{Title: "番外"}
-			}
-			currentCh = &Chapter{Title: line}
-			continue
-		}
-		if currentCh != nil {
-			// 章节内容
-			lineText := strings.ReplaceAll(strings.ReplaceAll(line, "<", "&lt;"), ">", "&gt;")
-			currentCh.Content.WriteString("<p style=\"text-indent:2em\">" + lineText + "</p>\n")
-		}
-
-	}
-
-	// 处理最后一个卷和章节
-	if currentCh != nil && currentVol != nil {
-		currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-	}
-	if currentVol != nil {
-		book.Volumes = append(book.Volumes, *currentVol)
-	}
-
-	return e, nil
-}
-
-func (c *epubConverter) setCover(book *Book, e *goepub.Epub) error {
-	cover := book.Cover
-	if isURLorFTP(book.Cover) {
-		log.Printf("使用网络图片作为封面 -> %s", book.Cover)
-		req, err := http.NewRequest(http.MethodGet, book.Cover, nil)
-		if err != nil {
-			log.Printf("创建网络请求失败 -> %v", err)
-			return err
-		}
-		req.Header.Add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0")
-		req.Header.Add("Referer", book.Cover)
-		req.Header.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7\n")
-		req.Header.Add("Accept-Language", "zh-CN,zh;q=0.9")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			log.Printf("网络请求失败 -> %v", err)
-			return err
-		} else if resp.StatusCode != 200 {
-			log.Printf("网络请求失败 -> %s", resp.Status)
-			return fmt.Errorf("网络请求失败")
-		}
-		defer func(Body io.ReadCloser) {
-			_ = resp.Body.Close()
-		}(resp.Body)
-
-		cover = filepath.Join(os.TempDir(), fmt.Sprintf("%d.jpg", time.Now().UnixNano()))
-		f, err := os.Create(cover)
-		if err != nil {
-			log.Printf("创建临时文件失败 -> %s %v", cover, err)
-			return err
-		} else {
-			_, _ = io.Copy(f, resp.Body)
-			_ = f.Close()
-		}
-	}
-	cover, err := e.AddImage(cover, filepath.Base(cover))
-	if err != nil {
-		log.Printf("添加图片失败 -> %s %v", book.Cover, err)
-		return err
-	} else {
-		err = e.SetCover(cover, "")
-		if err != nil {
-			log.Printf("设置封面失败 -> %v", err)
-			return err
 		}
 	}
 	return nil
 }
 
+// setCover 将封面注入 EPUB。
+// 封面既支持本地文件，也支持先下载到临时文件后再写入。
+func (c *epubConverter) setCover(ctx context.Context, book *Book, e *epublib.Epub) (func(), error) {
+	if strings.TrimSpace(book.Cover) == "" {
+		return nil, nil
+	}
+
+	coverPath, cleanup, err := prepareCover(ctx, book.Cover)
+	if err != nil {
+		return nil, err
+	}
+
+	internalPath, err := e.AddImage(coverPath, filepath.Base(coverPath))
+	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return nil, fmt.Errorf("添加封面失败: %w", err)
+	}
+	if err := e.SetCover(internalPath, ""); err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return nil, fmt.Errorf("设置封面失败: %w", err)
+	}
+	return cleanup, nil
+}
+
+// NewEPUBConverter 创建一个新的 EPUB 转换器实现。
 func NewEPUBConverter() Converter {
 	return &epubConverter{}
 }
 
-// 判断是否是网络地址
+// isURLorFTP 判断封面参数是否为可下载的远程地址。
 func isURLorFTP(input string) bool {
 	parsedURL, err := url.Parse(input)
 	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
 		return false
 	}
-	// 常见协议判断
-	supportedSchemes := []string{"http", "https", "ftp"}
-	for _, scheme := range supportedSchemes {
-		if strings.EqualFold(parsedURL.Scheme, scheme) {
-			return true
+	switch strings.ToLower(parsedURL.Scheme) {
+	case "http", "https", "ftp":
+		return true
+	default:
+		return false
+	}
+}
+
+// prepareCover 将封面转换为一个可被 go-epub 读取的本地文件路径。
+// 如果传入的是远程地址，会先下载到临时文件并返回对应清理函数。
+func prepareCover(ctx context.Context, cover string) (string, func(), error) {
+	if !isURLorFTP(cover) {
+		return cover, nil, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cover, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("创建封面请求失败: %w", err)
+	}
+	req.Header.Set("User-Agent", "gotexttoepub/1.2")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("下载封面失败: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", nil, fmt.Errorf("下载封面失败: %s", resp.Status)
+	}
+
+	// 优先沿用远程 URL 的扩展名，这样后续媒体类型识别更稳定。
+	ext := filepath.Ext(resp.Request.URL.Path)
+	if ext == "" {
+		ext = filepath.Ext(cover)
+	}
+	if ext == "" {
+		ext = ".jpg"
+	}
+
+	f, err := os.CreateTemp("", "gotexttoepub-cover-*"+ext)
+	if err != nil {
+		return "", nil, fmt.Errorf("创建封面临时文件失败: %w", err)
+	}
+
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", nil, fmt.Errorf("写入封面临时文件失败: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", nil, fmt.Errorf("关闭封面临时文件失败: %w", err)
+	}
+
+	return f.Name(), func() {
+		_ = os.Remove(f.Name())
+	}, nil
+}
+
+// formatParagraph 将原始文本行包装成 XHTML 段落。
+func formatParagraph(line string) string {
+	return ParagraphStart + html.EscapeString(line) + ParagraphEnd
+}
+
+// deriveIntro 从已解析的章节中提取简介内容。
+// 仅在调用方未显式提供简介时使用。
+func deriveIntro(book *Book) string {
+	stripFirstParagraphTag := regexp.MustCompile(`(?i)^<p[^>]*>|</p>$`)
+	for _, volume := range book.Volumes {
+		for _, chapter := range volume.Chapters {
+			if book.IntroRegex != nil && book.IntroRegex.MatchString(chapter.Title) {
+				return strings.TrimSpace(removeHTMLTags(stripFirstParagraphTag.ReplaceAllString(chapter.Content.String(), "")))
+			}
 		}
 	}
-	return false
+	return ""
 }

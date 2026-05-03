@@ -1,400 +1,239 @@
 package goepub
 
 import (
-	"bufio"
+	"context"
 	"embed"
-	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"mime"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	goepub "github.com/go-shiori/go-epub"
-	"github.com/vincent-petithory/dataurl"
+	epublib "github.com/go-shiori/go-epub"
 )
 
 //go:embed Fonts
-var _fonts embed.FS
+var embeddedFonts embed.FS
 
 //go:embed Styles
-var _styles embed.FS
+var embeddedStyles embed.FS
 
 type epub struct {
-	txtp string
-	*goepub.Epub
-	content []*chapter
-	author  string
-	cover   string
-	reg     *regexp.Regexp
-	volume  *regexp.Regexp
+	book Book
 }
 
-type chapter struct {
-	Title   string
-	Content string
-}
-
+// NewConverter 创建旧版链式调用风格的转换器。
+// 它内部最终仍会走新的 Book + Converter 主流程，主要用于兼容历史用法。
 func NewConverter() *epub {
 	return &epub{}
 }
 
+// SetContent 设置待转换的 TXT 文件路径。
 func (e *epub) SetContent(path string) *epub {
-	e.txtp = path
+	e.book.Filename = path
 	return e
 }
 
+// SetAuthor 手动指定作者，优先级高于自动解析。
 func (e *epub) SetAuthor(author string) *epub {
-	e.author = author
+	e.book.Author = author
 	return e
 }
 
+// SetCover 设置封面路径或封面 URL。
 func (e *epub) SetCover(cover string) *epub {
-	if strings.HasPrefix(cover, "http://") || strings.HasPrefix(cover, "https://") {
-		resp, err := http.Get(cover)
-		if err != nil {
-			log.Printf("下载小说封面失败 -> %v", err)
-			return e
-		}
-		defer resp.Body.Close()
-		contentType := resp.Header.Get("Content-Type")
-		var ext string
-		exts, err := mime.ExtensionsByType(contentType)
-		if err == nil && len(exts) > 0 {
-			ext = exts[0]
-		}
-		if ext == "" {
-			ext = ".jpg"
-		}
-		f, err := os.CreateTemp("", "cover*."+ext)
-		if err != nil {
-			log.Printf("生成临时文件失败 -> %v", err)
-			return e
-		}
-		defer f.Close()
-		_, err = io.Copy(f, resp.Body)
-		if err != nil {
-			log.Printf("保存封面失败 -> %v", err)
-			return e
-		}
-		e.cover = f.Name()
-	} else {
-		e.cover = cover
-	}
+	e.book.Cover = cover
 	return e
 }
 
-func (e *epub) SetRegExp(regexp *regexp.Regexp) *epub {
-	e.reg = regexp
+// SetRegExp 设置章节匹配正则。
+func (e *epub) SetRegExp(regex *regexp.Regexp) *epub {
+	e.book.ChapterRegex = regex
 	return e
 }
 
-func (e *epub) SetVolumeReg(regexp *regexp.Regexp) *epub {
-	e.volume = regexp
+// SetVolumeReg 设置卷匹配正则。
+func (e *epub) SetVolumeReg(regex *regexp.Regexp) *epub {
+	e.book.VolumeRegex = regex
 	return e
 }
 
-func (e *epub) run(style string) error {
-	var err error
-
-	// 变量定义
-	var (
-		title      string
-		author     string
-		currentVol *Volume
-		currentCh  *Chapter
-		volumes    []Volume
-	)
-	if e.txtp == "" {
-		return errors.New("TXT 文件路径不能为空")
-	}
-	p, err := filepath.Abs(e.txtp)
-	if err != nil {
-		return err
-	}
-	e.txtp = p
-
-	if e.reg == nil {
-		return errors.New("章节提取正则错误")
-	}
-	f, err := os.Open(p)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-	// 行处理
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		// 判断标题
-		if title == "" && regexp.MustCompile(TitlePattern).MatchString(line) {
-			title = line
-			e.SetTitle(title)
-			log.Printf("小说标题: %s", title)
-			continue
-		}
-
-		// 判断作者
-		if author == "" && regexp.MustCompile(AuthorPattern).MatchString(line) {
-			matches := regexp.MustCompile(AuthorPattern).FindStringSubmatch(line)
-			if len(matches) > 1 {
-				author = strings.TrimSpace(matches[1])
-				e.SetAuthor(author)
-				e.author = author
-				log.Printf("小说作者: %s", author)
-			}
-			continue
-		}
-
-		// 判断卷标题
-		if e.volume != nil && e.volume.MatchString(line) {
-			if currentCh != nil && currentVol != nil {
-				currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-				currentCh = nil
-			}
-			// 处理当前卷
-			if currentVol != nil {
-				volumes = append(volumes, *currentVol)
-			}
-			log.Printf("解析卷: %s", line)
-			currentVol = &Volume{Title: line}
-			continue
-		}
-		// 判断章节
-		if e.reg != nil && e.reg.MatchString(line) {
-			if currentVol == nil {
-				currentVol = &Volume{}
-			}
-			// 处理当前章节
-			if currentCh != nil && currentVol != nil {
-				currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-			}
-			log.Printf("解析章节: %s", line)
-			currentCh = &Chapter{Title: line}
-			continue
-		}
-		// 排除一些特殊章节
-		if line == "楔子" || line == "卷首语" || line == "序" || line == "完本感言" || line == "楔子语" || strings.HasPrefix(line, "简介") || strings.HasPrefix(line, "内容简介") {
-			if currentVol == nil {
-				currentVol = &Volume{}
-			}
-			if currentCh != nil {
-				currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-			}
-			log.Printf("解析特殊章节: %s", line)
-			currentCh = &Chapter{Title: line}
-			continue
-		}
-
-		if regexp.MustCompile(ExtraPattern).MatchString(line) {
-			// 将番外视为一个独立章节
-			if currentCh != nil && currentVol != nil {
-				currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-				currentCh = nil
-			}
-			if currentVol == nil {
-				currentVol = &Volume{Title: "番外"}
-			}
-			currentCh = &Chapter{Title: line}
-			continue
-		}
-		if currentCh != nil {
-			// 章节内容
-			lineText := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(line, "<", "&lt;"), ">", "&gt;"))
-			currentCh.Content.WriteString("<p style=\"text-indent:2em\">" + lineText + "</p>\n")
-		}
-
-	}
-
-	// 处理最后一个卷和章节
-	if currentCh != nil && currentVol != nil {
-		currentVol.Chapters = append(currentVol.Chapters, *currentCh)
-	}
-	if currentVol != nil {
-		volumes = append(volumes, *currentVol)
-	}
-	if len(volumes) > 0 {
-		// 按照卷和章生成 EPUB
-		for i, vol := range volumes {
-			parentFilename := ""
-			if vol.Title != "" {
-				//internalFilename := fmt.Sprintf("volume%d.xhtml", i)
-				parentFilename, err = e.AddSection(fmt.Sprintf("<h1>%s</h1>", vol.Title), vol.Title, "", style)
-				if err != nil {
-					log.Printf("添加卷失败 -> %v", err)
-					return err
-				}
-			}
-			for j, ch := range vol.Chapters {
-				// 如果第一个卷的第一个章节不是标题，则设置小说简介
-				if i == 0 && j == 0 && vol.Title == "" && e.reg != nil && !e.reg.MatchString(ch.Title) {
-					e.SetDescription(removeHTMLTags(ch.Content.String()))
-				}
-
-				//chapterFilename := fmt.Sprintf("volume%d_chapter%d.xhtml", i, j)
-				_, err = e.AddSubSection(parentFilename, fmt.Sprintf("<h2>%s</h2>%s", ch.Title, ch.Content.String()), ch.Title, "", style)
-				if err != nil {
-					log.Printf("添加章节失败 ->卷：%s - 章: %s - 错误: %v", vol.Title, ch.Title, err)
-					return err
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
+// Convert 兼容旧版 API，将链式配置转换为 Book 后交给统一转换器执行。
 func (e *epub) Convert(save string) error {
-	var err error
-	// 创建 EPUB
-	e.Epub, err = goepub.NewEpub("")
-	if err != nil {
-		return err
-	}
-	fErr := e.addFont()
-	if fErr != nil {
-		log.Printf("添加字体失败 -> %v", fErr)
-		return fErr
-	}
-	style, cErr := e.addCSS()
-	if cErr != nil {
-		log.Printf("添加样式失败 -> %v", cErr)
-		return cErr
-	}
-	if err := e.run(style); err != nil {
-		return err
-	}
-	e.SetLang("zh-CN")
-
-	e.Epub.SetAuthor(e.author)
-	if e.cover != "" {
-		cover, err := e.AddImage(e.cover, filepath.Base(e.cover))
-		if err != nil {
-			log.Printf("【%s】添加图片失败 -> %s %s", e.Title(), e.cover, err)
-			return err
-		} else {
-			err := e.Epub.SetCover(cover, "")
-			if err != nil {
-				log.Printf("设置封面失败 -> %s", err)
-				return err
-			}
-		}
-	}
-	if save == "" {
-		s, err := filepath.Abs("./" + e.Title() + ".epub")
-		if err != nil {
-			return err
-		}
-		if _, err := os.Stat(filepath.Dir(s)); os.IsNotExist(err) {
-			if err := os.MkdirAll(filepath.Dir(s), 0755); err != nil {
-				log.Printf("创建目录失败 -> %s", err)
-			}
-		}
-		save = s
-	}
-
-	return e.Write(save)
+	book := e.book
+	book.Output = save
+	return NewEPUBConverter().Convert(context.Background(), &book)
 }
 
-func (e *epub) addFont() error {
-	err := fs.WalkDir(_fonts, "Fonts", func(path string, d fs.DirEntry, err error) error {
+// addEmbeddedFonts 将内置字体复制为临时文件并注册到 EPUB。
+// 之所以不用 data URL，是因为底层库对字体资源的兼容性更偏向文件输入。
+func addEmbeddedFonts(e *epublib.Epub) (func(), error) {
+	var cleanups []func()
+
+	err := fs.WalkDir(embeddedFonts, "Fonts", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
 		log.Printf("添加字体: %s", path)
-		data, err := _fonts.ReadFile(path)
+		data, err := embeddedFonts.ReadFile(path)
 		if err != nil {
-			log.Printf("添加字代失败 -> %s %v", path, err)
+			return fmt.Errorf("读取字体失败 %s: %w", path, err)
+		}
+
+		source, cleanup, err := writeTempAsset(path, data)
+		if err != nil {
 			return err
 		}
-		dURL := dataurl.New(data, e.getMimeType(path))
-		dURL.Encoding = dataurl.EncodingASCII
-		_, err = e.AddFont(dURL.String(), filepath.Base(path))
-		if err != nil {
-			log.Printf("添加字体失败 -> %s %v", path, err)
-			return fmt.Errorf("添加字体失败 ->%s %w", path, err)
-		}
-		return nil
-	})
-	return err
-}
 
-func (e *epub) addCSS() (string, error) {
-	var styles []string
-	// 遍历 Styles 目录下的所有文件
-	err := fs.WalkDir(_styles, "Styles", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err // 如果有错误直接返回
-		}
-		if !d.IsDir() { // 只处理文件
-			log.Printf("添加样式: %s", path)
-			// 读取文件内容
-			data, err := _styles.ReadFile(path)
-			if err != nil {
-				log.Printf("Error reading file %s: %v\n", path, err)
-				return nil // 继续处理其他文件
+		if _, err := e.AddFont(source, filepath.Base(path)); err != nil {
+			if cleanup != nil {
+				cleanup()
 			}
-
-			// 推断 MIME 类型
-			mimeType := e.getMimeType(path)
-
-			// 创建 dataurl
-			dURL := dataurl.New(data, mimeType)
-			dURL.Encoding = dataurl.EncodingASCII
-			style, err := e.AddCSS(dURL.String(), filepath.Base(path))
-			if err != nil {
-				log.Printf("添加样式失败 -> %s %v", path, err)
-				return err
-			}
-			styles = append(styles, style)
+			return fmt.Errorf("添加字体失败 %s: %w", path, err)
+		}
+		if cleanup != nil {
+			cleanups = append(cleanups, cleanup)
 		}
 		return nil
 	})
 	if err != nil {
-		return "", err
+		runCleanups(cleanups)
+		return nil, err
 	}
-	if len(styles) > 0 {
-		cssContent := ""
-		for _, style := range styles {
-			cssContent += fmt.Sprintf("@import url('%s');\n", style)
-		}
-		dURL := dataurl.New([]byte(cssContent), "text/css")
-		dURL.Encoding = dataurl.EncodingASCII
-		css, err := e.AddCSS(dURL.String(), "styles.css")
+	return func() {
+		runCleanups(cleanups)
+	}, nil
+}
+
+// addEmbeddedStyles 将内置样式注册到 EPUB，并额外生成一个聚合样式文件统一导入。
+func addEmbeddedStyles(e *epublib.Epub) (string, func(), error) {
+	var imports []string
+	var cleanups []func()
+
+	err := fs.WalkDir(embeddedStyles, "Styles", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			log.Printf("添加样式失败 -> %v", err)
-			return "", err
+			return err
 		}
-		return css, nil
+		if d.IsDir() {
+			return nil
+		}
+
+		log.Printf("添加样式: %s", path)
+		data, err := embeddedStyles.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("读取样式失败 %s: %w", path, err)
+		}
+
+		source, cleanup, err := writeTempAsset(path, data)
+		if err != nil {
+			return err
+		}
+
+		style, err := e.AddCSS(source, filepath.Base(path))
+		if err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return fmt.Errorf("添加样式失败 %s: %w", path, err)
+		}
+		if cleanup != nil {
+			cleanups = append(cleanups, cleanup)
+		}
+		imports = append(imports, fmt.Sprintf("@import url('%s');", style))
+		return nil
+	})
+	if err != nil {
+		runCleanups(cleanups)
+		return "", nil, err
 	}
-	return "", nil
+
+	if len(imports) == 0 {
+		return "", func() {
+			runCleanups(cleanups)
+		}, nil
+	}
+
+	source, cleanup, err := writeTempAsset("styles.css", []byte(strings.Join(imports, "\n")))
+	if err != nil {
+		runCleanups(cleanups)
+		return "", nil, err
+	}
+	if cleanup != nil {
+		cleanups = append(cleanups, cleanup)
+	}
+
+	style, err := e.AddCSS(source, "styles.css")
+	if err != nil {
+		runCleanups(cleanups)
+		return "", nil, fmt.Errorf("创建聚合样式失败: %w", err)
+	}
+	return style, func() {
+		runCleanups(cleanups)
+	}, nil
 }
 
-// getMimeType 根据文件扩展名推断 MIME 类型
-func (e *epub) getMimeType(path string) string {
-	ext := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
-	switch ext {
-	case "css":
+// mimeTypeByPath 按扩展名推断静态资源的 MIME 类型。
+func mimeTypeByPath(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".css":
 		return "text/css"
+	case ".ttf":
+		return "font/ttf"
+	case ".otf":
+		return "font/otf"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
 	default:
-		return "application/octet-stream" // 默认二进制流
+		if detected := mime.TypeByExtension(filepath.Ext(path)); detected != "" {
+			return detected
+		}
+		return "application/octet-stream"
 	}
 }
 
+// removeHTMLTags 用于从章节 XHTML 中提取纯文本简介。
 func removeHTMLTags(input string) string {
-	// 定义正则表达式，用于匹配 HTML 标签
 	re := regexp.MustCompile(`<[^>]*>`)
-	// 替换所有匹配项为空字符串
 	return re.ReplaceAllString(input, "")
+}
+
+// writeTempAsset 将内置资源落盘到临时文件，并返回对应的清理函数。
+// go-epub 在最终 Write 阶段才会真正读取这些资源，因此临时文件必须延迟清理。
+func writeTempAsset(name string, data []byte) (string, func(), error) {
+	ext := filepath.Ext(name)
+	if ext == "" {
+		ext = ".tmp"
+	}
+
+	f, err := os.CreateTemp("", "gotexttoepub-asset-*"+ext)
+	if err != nil {
+		return "", nil, fmt.Errorf("创建临时资源文件失败 %s: %w", name, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", nil, fmt.Errorf("写入临时资源文件失败 %s: %w", name, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", nil, fmt.Errorf("关闭临时资源文件失败 %s: %w", name, err)
+	}
+
+	return f.Name(), func() {
+		_ = os.Remove(f.Name())
+	}, nil
+}
+
+// runCleanups 按顺序执行资源清理函数。
+func runCleanups(cleanups []func()) {
+	for _, cleanup := range cleanups {
+		if cleanup != nil {
+			cleanup()
+		}
+	}
 }

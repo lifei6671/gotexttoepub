@@ -1,0 +1,67 @@
+# 规则配置示例
+# 同一份配置文件里可以同时维护多个渠道规则。
+# 顶层规则会作为“全局基础规则”，然后再叠加选中的渠道配置。
+
+# 未显式传 -rule-channel 时，默认使用的渠道。
+default_channel = "default"
+
+# 这些规则对所有渠道都生效。
+intro_prefixes = [
+  "书籍简介：",
+  "内容简介：",
+  "小说简介：",
+]
+
+ignored_line_contains = [
+  "今天只有",
+  "整理大纲",
+]
+
+[channels.default]
+# 先继承一个或多个内置预设。
+extends_presets = [
+  "serial",
+]
+
+# 如果书名或作者不是默认格式，可以打开下面两行做覆盖。
+# title_regex = "^书名[:：](.*)$"
+# author_regex = "^作者名[:：](.*)$"
+
+# 如果“书名 + 作者”写在同一行，也可以单独覆盖这一条。
+# title_author_regex = "^《(.+?)》\\s+作者[:：]\\s*(.+)$"
+
+# 如果卷名或章节名格式特殊，也可以直接在配置文件里覆盖。
+# volume_regex = "^(正文卷|序章卷|终卷).*$"
+# chapter_regex = "^(第[0-9]+章|Chapter\\s+[0-9]+).*$"
+
+# 番外和简介章节的规则也支持配置。
+# extra_regex = "^番外|^后记"
+# intro_regex = "^(内容简介|简介|序章说明)$"
+
+ignored_line_patterns = [
+  "^第[一二三四五六七八九十百零0-9]+(卷|部|集)接近尾声.*$",
+  "^第[0-9]+卷说明.*$",
+]
+
+[channels.qidian]
+extends_presets = [
+  "qidian",
+  "serial",
+]
+
+ignored_line_contains = [
+  "求月票",
+  "首订",
+  "均订",
+]
+
+[channels.fanqie]
+extends_presets = [
+  "fanqie",
+  "serial",
+]
+
+ignored_line_contains = [
+  "催更",
+  "更新通知",
+]

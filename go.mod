@@ -1,10 +1,12 @@
 module github.com/lifei6671/gotexttoepub
 
-go 1.21
+go 1.26
 
 require (
+	github.com/BurntSushi/toml v1.4.0
 	github.com/go-shiori/go-epub v1.2.1
 	github.com/urfave/cli/v2 v2.27.5
+	golang.org/x/text v0.31.0
 )
 
 require (
