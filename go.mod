@@ -9,6 +9,8 @@ require (
 	golang.org/x/text v0.31.0
 )
 
+replace github.com/go-shiori/go-epub => ./third_party/go-epub
+
 require (
 	github.com/cpuguy83/go-md2man/v2 v2.0.5 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.7 // indirect

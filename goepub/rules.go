@@ -403,6 +403,7 @@ func defaultRuleConfig() RuleConfig {
 		},
 		IgnoredLinePatterns: []string{
 			`^第[一二三四五六七八九十百零0-9]+(卷|部|集)接近尾声.*$`,
+			`^第[一二三四五六七八九十百零0-9]+(卷|部|集)[:：].*[，,；;：:].*[。！？?!~～]\s*$`,
 		},
 		IgnoredLineContains: append([]string(nil), defaultAuthorNoteContains...),
 	}

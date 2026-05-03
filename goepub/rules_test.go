@@ -40,9 +40,19 @@ func TestBuildParseRulesUsesBuiltinIgnoreRules(t *testing.T) {
 		t.Fatalf("expected author note to be ignored: %s", authorNote)
 	}
 
+	promoSentence := "第一卷：这个时代，人类渺小如尘埃。"
+	if !rules.ShouldIgnoreLine(promoSentence) {
+		t.Fatalf("expected prose-like volume sentence to be ignored: %s", promoSentence)
+	}
+
 	realVolume := "第一卷 灰界降临"
 	if rules.ShouldIgnoreLine(realVolume) {
 		t.Fatalf("expected real volume title not to be ignored: %s", realVolume)
+	}
+
+	realVolumeWithColon := "第一卷：灰界降临"
+	if rules.ShouldIgnoreLine(realVolumeWithColon) {
+		t.Fatalf("expected real volume title with colon not to be ignored: %s", realVolumeWithColon)
 	}
 }
 
