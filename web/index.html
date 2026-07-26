@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f2ecdf">
+  <meta name="description" content="将 TXT 文稿在线转换为 EPUB 电子书。">
+  <title>拾页 · TXT 转换为 EPUB</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="page-grain" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="拾页首页">
+      <span class="brand-mark" aria-hidden="true">拾</span>
+      <span>
+        <strong>拾页</strong>
+        <small>TXT → EPUB 转换所</small>
+      </span>
+    </a>
+    <div class="capacity" id="capacity" aria-live="polite">
+      <span class="capacity-dot" aria-hidden="true"></span>
+      <span id="capacityText">正在查看空闲转换队列…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="pageTitle">
+      <div class="hero-copy">
+        <p class="eyebrow">A SMALL DIGITAL BINDERY</p>
+        <h1 id="pageTitle">把一份文稿，<br>转换成一本书。</h1>
+        <p class="lead">
+          上传 TXT 文档，我们会为它生成 EPUB。成品可在 24 小时内下载，
+          转换记录只保存在你的浏览器里。
+        </p>
+      </div>
+
+      <div class="bindery-card">
+        <span class="binding-thread" aria-hidden="true"></span>
+        <form id="conversionForm" novalidate>
+          <div class="field-block">
+            <span class="field-index" aria-hidden="true">壹</span>
+            <div class="field-content">
+              <label for="fileInput">选择 TXT 文稿</label>
+              <p class="field-hint">请选择纯文本文件</p>
+              <label class="file-drop" id="fileDrop" for="fileInput">
+                <input id="fileInput" name="file" type="file" accept=".txt,text/plain" required>
+                <span class="file-icon" aria-hidden="true">
+                  <span></span>
+                </span>
+                <span class="file-copy">
+                  <strong id="fileTitle">点击选择，或拖放到这里</strong>
+                  <small id="fileMeta">TXT 文档</small>
+                </span>
+                <span class="file-action">选择文件</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="field-block">
+            <span class="field-index" aria-hidden="true">贰</span>
+            <div class="field-content">
+              <label for="coverFileInput">选择封面 <span class="optional">可选</span></label>
+              <p class="field-hint">上传 JPEG/PNG，或粘贴公开 HTTPS 链接；均不选时会自动题签制封。</p>
+              <div class="cover-options">
+                <label class="cover-file-drop" id="coverFileDrop" for="coverFileInput">
+                  <input id="coverFileInput" name="cover_file" type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png">
+                  <span class="cover-file-icon" aria-hidden="true">图</span>
+                  <span class="cover-file-copy">
+                    <strong id="coverFileTitle">上传一张封面</strong>
+                    <small id="coverFileMeta">JPEG 或 PNG</small>
+                  </span>
+                  <span class="cover-file-action">选择图片</span>
+                </label>
+                <button class="cover-clear" id="clearCoverFile" type="button" hidden>改用链接</button>
+
+                <div class="cover-or" aria-hidden="true"><span>或</span></div>
+
+                <div class="url-field" id="coverUrlField">
+                  <span aria-hidden="true">↗</span>
+                  <input
+                    id="coverUrl"
+                    name="cover_url"
+                    type="url"
+                    inputmode="url"
+                    autocomplete="url"
+                    placeholder="https://example.com/cover.jpg"
+                    aria-describedby="coverSourceDescription"
+                  >
+                </div>
+
+                <div class="cover-preview" id="coverPreview" data-source="auto" aria-live="polite">
+                  <div class="cover-preview-art">
+                    <img id="coverPreviewImage" alt="" hidden>
+                    <span class="cover-preview-mark" id="coverPreviewMark" aria-hidden="true">题</span>
+                  </div>
+                  <div class="cover-source-copy">
+                    <strong id="coverSourceTitle">将自动生成题签封面</strong>
+                    <p id="coverSourceDescription">会依据 TXT 文件名生成 PNG 并随文稿上传。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p class="form-error" id="formError" role="alert" hidden></p>
+
+          <button class="submit-button" id="submitButton" type="submit">
+            <span>开始制作 EPUB</span>
+            <span class="button-arrow" aria-hidden="true">→</span>
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <section class="progress-panel" id="progressPanel" aria-labelledby="progressTitle" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">CONVERSION STATUS</p>
+          <h2 id="progressTitle">正在转换</h2>
+        </div>
+        <p class="job-reference">编号 <span id="jobId">—</span></p>
+      </div>
+
+      <ol class="spine-progress" id="spineProgress" aria-label="转换进度">
+        <li data-stage="uploading">
+          <span class="stitch" aria-hidden="true"></span>
+          <strong>上传文稿</strong>
+          <small id="uploadProgress">等待开始</small>
+        </li>
+        <li data-stage="queued">
+          <span class="stitch" aria-hidden="true"></span>
+          <strong>等待转换</strong>
+          <small id="queueProgress">尚未排队</small>
+        </li>
+        <li data-stage="converting">
+          <span class="stitch" aria-hidden="true"></span>
+          <strong>生成 EPUB</strong>
+          <small id="convertProgress">尚未开始</small>
+        </li>
+        <li data-stage="succeeded">
+          <span class="stitch" aria-hidden="true"></span>
+          <strong>成品就绪</strong>
+          <small id="doneProgress">等待成品</small>
+        </li>
+      </ol>
+
+      <div class="status-note" id="statusNote" aria-live="polite">
+        <span class="status-seal" id="statusSeal" aria-hidden="true">制</span>
+        <div>
+          <strong id="statusTitle">准备上传</strong>
+          <p id="statusMessage">请稍候，正在准备转换队列。</p>
+        </div>
+      </div>
+
+      <div class="download-card" id="downloadCard" hidden>
+        <div>
+          <span class="download-label">YOUR BOOK IS READY</span>
+          <strong id="downloadName">output.epub</strong>
+          <small id="downloadMeta">成品将在 24 小时后失效</small>
+        </div>
+        <a class="download-button" id="downloadLink" href="#">
+          下载 EPUB
+          <span aria-hidden="true">↓</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="history-section" aria-labelledby="historyTitle">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">RECENT EDITIONS</p>
+          <h2 id="historyTitle">最近转换</h2>
+        </div>
+        <button class="text-button" id="clearHistory" type="button" hidden>清空本地记录</button>
+      </div>
+
+      <div class="history-empty" id="historyEmpty">
+        <span aria-hidden="true">册</span>
+        <p>这里还没有成品。<br>你的最近 30 次转换会显示在这里。</p>
+      </div>
+      <ul class="history-list" id="historyList" aria-live="polite"></ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>文稿仅用于生成电子书 · 成品最多保留 24 小时</p>
+    <span aria-hidden="true">拾页制本</span>
+  </footer>
+
+  <template id="historyItemTemplate">
+    <li class="history-item">
+      <span class="history-glyph" aria-hidden="true">文</span>
+      <div class="history-main">
+        <strong class="history-name"></strong>
+        <p class="history-detail"></p>
+      </div>
+      <span class="history-status"></span>
+      <a class="history-download" href="#">下载</a>
+    </li>
+  </template>
+</body>
+</html>

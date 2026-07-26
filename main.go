@@ -10,7 +10,8 @@ import (
 	"github.com/lifei6671/gotexttoepub/cmd"
 )
 
-const appVersion = "1.2"
+// appVersion 会在标签发布构建时通过 -ldflags 注入。
+var appVersion = "1.2"
 
 // main 负责初始化 CLI 应用并分发子命令。
 func main() {
@@ -21,7 +22,7 @@ func main() {
 		Name:     "gotexttoepub",
 		Usage:    "将 TXT 小说转换为 EPUB 文件。",
 		Version:  appVersion,
-		Commands: []*cli.Command{cmd.Start, cmd.RulesCommand},
+		Commands: []*cli.Command{cmd.Start, cmd.RulesCommand, cmd.Serve},
 		CommandNotFound: func(c *cli.Context, command string) {
 			commandNotFound = true
 			cmd.HandleCommandNotFound(c, command)

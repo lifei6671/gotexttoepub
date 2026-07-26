@@ -1,6 +1,6 @@
 # go-texttoepub
 
-`go-texttoepub` 是一个将 TXT 小说转换为 EPUB 电子书的 Go 命令行工具，也可以作为库嵌入到其他项目中使用。
+`go-texttoepub` 是一个将 TXT 小说转换为 EPUB 电子书的 Go 工具，既可以启动内嵌 Web 界面，也可以作为命令行或 Go 库使用。
 
 项目的目标不是做复杂排版，而是提供一条足够稳定的转换链路：
 
@@ -33,6 +33,12 @@
   - 命令行参数解析与命令分发
 - `goepub/`
   - 核心转换逻辑，包括文本解析、卷章组织、EPUB 输出和资源处理
+- `internal/jobs/`
+  - Web 转换队列、任务状态、文件保留和磁盘配额清理
+- `internal/webapp/`、`internal/websecure/`
+  - Web API、上传校验、下载授权和安全封面抓取
+- `web/`
+  - 编译进可执行文件的前端页面
 
 ## 功能说明
 
@@ -97,6 +103,57 @@ go build main.go
 
 - Windows：`gotexttoepub.exe`
 - Linux / macOS：`gotexttoepub`
+
+## Web 界面
+
+启动本地 Web 服务：
+
+```bash
+gotexttoepub serve
+```
+
+然后访问：
+
+```text
+http://127.0.0.1:8080
+```
+
+Web 模式支持：
+
+- 上传单个 TXT，并可上传 JPEG/PNG 封面或填写 HTTPS 封面链接
+- 未提供封面时，由浏览器根据 TXT 文件名自动生成题签风封面
+- 有界等待队列和全局转换并发限制
+- 默认每个 IP 只允许一个未完成任务
+- 浏览器本地保存最近 30 条转换历史
+- EPUB 从转换完成起保留 24 小时
+- 超过磁盘配额时优先删除最早完成的 EPUB
+- 服务重启后恢复尚未完成的本地任务
+
+常用配置：
+
+```bash
+gotexttoepub serve \
+  --address="127.0.0.1:8080" \
+  --data-dir="./data" \
+  --workers=2 \
+  --queue-capacity=8 \
+  --per-ip-limit=1 \
+  --disk-quota-bytes=5368709120 \
+  --max-upload-bytes=20971520
+```
+
+所有 Web 参数也支持对应的 `GTE_*` 环境变量，完整列表可通过
+`gotexttoepub serve --help` 查看。
+
+生产部署建议：
+
+- 只运行一个服务实例，并挂载一个持久化数据目录
+- 通过 HTTPS 反向代理对外提供服务，同时设置 `--secure-cookie`
+- 反向代理部署时设置准确的公开来源，例如
+  `--public-origin="https://epub.example.com"`
+- 仅使用 `--trusted-proxy` 配置确实可信的代理 CIDR
+- 不要把数据目录作为静态文件目录暴露
+- Web 封面只允许 HTTPS
 
 ## 命令行使用
 
@@ -452,8 +509,23 @@ gotexttoepub epub \
 
 ```bash
 go test ./...
+go test -race ./...
+go vet ./...
 go build ./...
 ```
+
+## 自动发布
+
+推送符合语义化版本格式的 `v*` 标签后，GitHub Actions 会自动创建同名
+Release，例如：
+
+```bash
+git tag v1.3.0
+git push origin v1.3.0
+```
+
+发布任务会生成 Linux、Windows 和 macOS 的 `amd64`、`arm64` 构建，
+压缩包名称和二进制内的版本号都来自标签，同时附带 SHA-256 校验文件。
 
 ## License
 

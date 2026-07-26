@@ -16,3 +16,6 @@
 .idea/
 .vscode/
 third_party/
+.codegraph/
+.playwright-cli/
+data/
