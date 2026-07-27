@@ -22,7 +22,7 @@ func main() {
 		Name:     "gotexttoepub",
 		Usage:    "将 TXT 小说转换为 EPUB 文件。",
 		Version:  appVersion,
-		Commands: []*cli.Command{cmd.Start, cmd.RulesCommand, cmd.Serve},
+		Commands: []*cli.Command{cmd.Start, cmd.RulesCommand, cmd.Serve, cmd.Install},
 		CommandNotFound: func(c *cli.Context, command string) {
 			commandNotFound = true
 			cmd.HandleCommandNotFound(c, command)

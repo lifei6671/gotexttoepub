@@ -514,6 +514,42 @@ go vet ./...
 go build ./...
 ```
 
+## 安装为 systemd 服务
+
+Linux 使用 systemd 且当前用户为 root 时，可以直接安装当前二进制：
+
+```bash
+sudo ./gotexttoepub install
+```
+
+安装命令会：
+
+- 原子复制二进制到 `/usr/local/bin/gotexttoepub`
+- 写入 `/etc/systemd/system/gotexttoepub.service`
+- 执行 `systemctl daemon-reload`
+- 启用并重启 `gotexttoepub.service`
+- 确认服务处于 active 状态
+
+服务默认监听 `127.0.0.1:8080`，数据保存在 `/var/lib/gotexttoepub`。
+如需调整域名、反向代理或并发参数，可创建 `/etc/default/gotexttoepub`，
+使用 `serve` 命令现有的 `GTE_*` 环境变量：
+
+```bash
+GTE_PUBLIC_ORIGIN=https://epub.example.com
+GTE_SECURE_COOKIE=true
+GTE_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
+```
+
+修改配置后重启服务：
+
+```bash
+sudo systemctl restart gotexttoepub.service
+sudo systemctl status gotexttoepub.service
+```
+
+重复执行 `install` 可更新二进制和本工具管理的 unit。若同名 unit 不是由
+本工具生成，安装器会拒绝覆盖，避免破坏已有管理员配置。
+
 ## 自动发布
 
 推送符合语义化版本格式的 `v*` 标签后，GitHub Actions 会自动创建同名

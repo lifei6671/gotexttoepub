@@ -1,0 +1,45 @@
+# Managed by gotexttoepub install
+[Unit]
+Description=TXT to EPUB Web Service
+Documentation=https://github.com/lifei6671/gotexttoepub
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=gotexttoepub
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/gotexttoepub
+Environment=GTE_DATA_DIR=/var/lib/gotexttoepub
+EnvironmentFile=-/etc/default/gotexttoepub
+ExecStart=@BINARY_PATH@ serve
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=40s
+KillSignal=SIGTERM
+UMask=0077
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
