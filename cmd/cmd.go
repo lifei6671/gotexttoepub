@@ -20,73 +20,77 @@ func newEpubCommand() *cli.Command {
 		Usage:       "将 TXT 小说转换为 EPUB",
 		Description: "按卷、章节规则解析 TXT 文件并输出 EPUB。",
 		Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:     "file",
-			Aliases:  []string{"f"},
-			Required: true,
-			Usage:    "TXT 文件路径",
-		},
-		&cli.StringFlag{
-			Name:    "cover",
-			Aliases: []string{"img"},
-			Usage:   "封面图片路径或 URL",
-		},
-		&cli.StringFlag{
-			Name:  "author",
-			Usage: "作者，留空则自动解析",
-		},
-		&cli.StringFlag{
-			Name:    "book-title-regexp",
-			Aliases: []string{"name-regexp"},
-			Usage:   "书名解析正则，支持使用捕获组提取最终书名",
-		},
-		&cli.StringFlag{
-			Name:  "author-regexp",
-			Usage: "作者解析正则，支持使用捕获组提取最终作者名",
-		},
-		&cli.StringFlag{
-			Name:  "lang",
-			Usage: "语言，默认 zh-CN",
-		},
-		&cli.StringFlag{
-			Name:    "encoding",
-			Aliases: []string{"charset"},
-			Usage:   "文本编码，默认 auto，可选 utf-8、gbk、gb18030",
-		},
-		&cli.StringFlag{
-			Name:    "rule-config",
-			Aliases: []string{"config"},
-			Usage:   "规则配置文件路径，默认使用内置规则，可用带注释的 TOML 文件覆盖少量解析规则",
-		},
-		&cli.StringFlag{
-			Name:    "rule-preset",
-			Aliases: []string{"preset"},
-			Usage:   "规则预设名称，多个预设使用逗号分隔，例如 qidian,serial",
-		},
-		&cli.StringFlag{
-			Name:    "rule-channel",
-			Aliases: []string{"channel"},
-			Usage:   "规则渠道名称，例如 default、qidian、fanqie；留空则使用规则文件默认渠道",
-		},
-		&cli.StringFlag{
-			Name:  "rule-preset-mode",
-			Usage: "自动探测预设的行为模式：off、suggest、apply，默认 suggest",
-		},
-		&cli.StringFlag{
-			Name:    "chapter-regexp",
-			Aliases: []string{"r", "regexr", "title-regexp", "chapter-pattern"},
-			Usage:   "提取章节标题的正则",
-		},
-		&cli.StringFlag{
-			Name:    "output",
-			Aliases: []string{"o"},
-			Usage:   "输出文件路径，或输出目录",
-		},
-		&cli.StringFlag{
-			Name:    "volume-regexp",
-			Aliases: []string{"vr", "volume-pattern"},
-			Usage:   "提取卷标题的正则",
-		},
+			&cli.StringFlag{
+				Name:     "file",
+				Aliases:  []string{"f"},
+				Required: true,
+				Usage:    "TXT 文件路径",
+			},
+			&cli.StringFlag{
+				Name:    "cover",
+				Aliases: []string{"img"},
+				Usage:   "封面图片路径或 URL",
+			},
+			&cli.StringFlag{
+				Name:  "author",
+				Usage: "作者，留空则自动解析",
+			},
+			&cli.StringFlag{
+				Name:    "book-title-regexp",
+				Aliases: []string{"name-regexp"},
+				Usage:   "书名解析正则，支持使用捕获组提取最终书名",
+			},
+			&cli.StringFlag{
+				Name:  "author-regexp",
+				Usage: "作者解析正则，支持使用捕获组提取最终作者名",
+			},
+			&cli.StringFlag{
+				Name:  "lang",
+				Usage: "语言，默认 zh-CN",
+			},
+			&cli.StringFlag{
+				Name:    "encoding",
+				Aliases: []string{"charset"},
+				Usage:   "文本编码，默认 auto，可选 utf-8、gbk、gb18030",
+			},
+			&cli.StringFlag{
+				Name:    "rule-config",
+				Aliases: []string{"config"},
+				Usage:   "规则配置文件路径，默认使用内置规则，可用带注释的 TOML 文件覆盖少量解析规则",
+			},
+			&cli.StringFlag{
+				Name:    "rule-preset",
+				Aliases: []string{"preset"},
+				Usage:   "规则预设名称，多个预设使用逗号分隔，例如 qidian,serial",
+			},
+			&cli.StringFlag{
+				Name:    "rule-channel",
+				Aliases: []string{"channel"},
+				Usage:   "规则渠道名称，例如 default、qidian、fanqie；留空则使用规则文件默认渠道",
+			},
+			&cli.StringFlag{
+				Name:  "rule-preset-mode",
+				Usage: "自动探测预设的行为模式：off、suggest、apply，默认 suggest",
+			},
+			&cli.StringFlag{
+				Name:    "chapter-regexp",
+				Aliases: []string{"r", "regexr", "title-regexp", "chapter-pattern"},
+				Usage:   "提取章节标题的正则",
+			},
+			&cli.StringFlag{
+				Name:    "output",
+				Aliases: []string{"o"},
+				Usage:   "输出文件路径，或输出目录",
+			},
+			&cli.StringFlag{
+				Name:    "volume-regexp",
+				Aliases: []string{"vr", "volume-pattern"},
+				Usage:   "提取卷标题的正则",
+			},
+			&cli.BoolFlag{
+				Name:  "allow-anomalies",
+				Usage: "检测到疑似缺章、乱序或第三方内容时仍继续转换",
+			},
 		},
 		Action: func(c *cli.Context) error {
 			book, err := buildBookFromFlags(c)
@@ -95,7 +99,7 @@ func newEpubCommand() *cli.Command {
 			}
 
 			start := time.Now()
-			if err := goepub.NewEPUBConverter().Convert(c.Context, book); err != nil {
+			if err := convertWithPreflightConfirmation(c, book); err != nil {
 				return fmt.Errorf("转换文档失败: %w", err)
 			}
 

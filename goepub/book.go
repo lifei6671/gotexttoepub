@@ -22,7 +22,7 @@ const (
 	AuthorPattern  = `^作者[:：](.*)$`
 	IntroPattern   = `^(内容简介|简介|楔子|引子|序|序言)$`
 	VolumePattern  = `^(第[一二三四五六七八九十百零0-9]+(卷|部|集))([\s　:：\-—].{0,30})?$`
-	ChapterPattern = `^((第[一二三四五六七八九十百千万零0-9]+(章|回|节))|(完本感言)).{0,40}$`
+	ChapterPattern = `^((第[一二三四五六七八九十百千万零〇两0-9]+(章|回|节))|(完本感言)).{0,40}$`
 	ExtraPattern   = `^番外.{0,30}$`
 	ParagraphStart = "<p style=\"text-indent: 2em;\">"
 	ParagraphEnd   = "</p>\n"
@@ -78,6 +78,8 @@ type Book struct {
 	// RuleConfigPath 是可选的规则配置文件路径。
 	// 留空时完全使用内置规则，填写后会在内置规则基础上做覆盖。
 	RuleConfigPath string
+	// AllowAnomalies 允许调用方在明确确认后忽略预检异常并继续转换。
+	AllowAnomalies bool
 
 	// VolumeRegex 用于识别卷标题。
 	VolumeRegex *regexp.Regexp
@@ -94,6 +96,7 @@ type Book struct {
 
 	parseRules          *ParseRules
 	detectedRulePresets []string
+	preflightReport     *PreflightReport
 }
 
 // FullDefault 填充默认值并规范化路径。

@@ -44,31 +44,69 @@ var (
 type Status string
 
 const (
-	StatusQueued     Status = "queued"
-	StatusConverting Status = "converting"
-	StatusSucceeded  Status = "succeeded"
-	StatusFailed     Status = "failed"
-	StatusExpired    Status = "expired"
-	StatusEvicted    Status = "evicted"
+	StatusQueued         Status = "queued"
+	StatusConverting     Status = "converting"
+	StatusReviewRequired Status = "review_required"
+	StatusSucceeded      Status = "succeeded"
+	StatusFailed         Status = "failed"
+	StatusExpired        Status = "expired"
+	StatusEvicted        Status = "evicted"
 )
+
+// InspectionIssue describes one source-text anomaly without depending on the
+// converter package that detected it.
+type InspectionIssue struct {
+	Type            string `json:"type"`
+	Severity        string `json:"severity"`
+	LineNumber      int    `json:"lineNumber"`
+	ChapterTitle    string `json:"chapterTitle"`
+	Message         string `json:"message"`
+	Evidence        string `json:"evidence"`
+	Detector        string `json:"detector"`
+	PreviousChapter *int   `json:"previousChapter,omitempty"`
+	CurrentChapter  *int   `json:"currentChapter,omitempty"`
+	MissingFrom     *int   `json:"missingFrom,omitempty"`
+	MissingTo       *int   `json:"missingTo,omitempty"`
+}
+
+// InspectionReport is the durable, format-neutral anomaly report exposed by a
+// conversion job.
+type InspectionReport struct {
+	Version      string            `json:"version"`
+	ChapterCount int               `json:"chapterCount"`
+	Issues       []InspectionIssue `json:"issues"`
+	Truncated    bool              `json:"truncated"`
+}
+
+// ReviewRequiredError asks Manager to pause a conversion for user review.
+type ReviewRequiredError struct {
+	Report InspectionReport
+}
+
+func (e ReviewRequiredError) Error() string {
+	return "conversion requires anomaly review"
+}
 
 // Job is the durable job record. ClientIP is deliberately never serialized.
 type Job struct {
-	ID            string     `json:"id"`
-	OwnerHash     string     `json:"ownerHash"`
-	ClientIP      string     `json:"-"`
-	ClientKey     string     `json:"clientKey,omitempty"`
-	OriginalName  string     `json:"originalName"`
-	InputSize     int64      `json:"inputSize"`
-	Status        Status     `json:"status"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	CompletedAt   *time.Time `json:"completedAt,omitempty"`
-	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
-	PurgeAt       *time.Time `json:"purgeAt,omitempty"`
-	QueuePosition int        `json:"queuePosition,omitempty"`
-	OutputName    string     `json:"outputName,omitempty"`
-	OutputSize    int64      `json:"outputSize,omitempty"`
-	ErrorCode     string     `json:"errorCode,omitempty"`
+	ID              string            `json:"id"`
+	OwnerHash       string            `json:"ownerHash"`
+	ClientIP        string            `json:"-"`
+	ClientKey       string            `json:"clientKey,omitempty"`
+	OriginalName    string            `json:"originalName"`
+	InputSize       int64             `json:"inputSize"`
+	Status          Status            `json:"status"`
+	CreatedAt       time.Time         `json:"createdAt"`
+	CompletedAt     *time.Time        `json:"completedAt,omitempty"`
+	ExpiresAt       *time.Time        `json:"expiresAt,omitempty"`
+	PurgeAt         *time.Time        `json:"purgeAt,omitempty"`
+	QueuePosition   int               `json:"queuePosition,omitempty"`
+	OutputName      string            `json:"outputName,omitempty"`
+	OutputSize      int64             `json:"outputSize,omitempty"`
+	ErrorCode       string            `json:"errorCode,omitempty"`
+	AllowAnomalies  bool              `json:"allowAnomalies,omitempty"`
+	Inspection      *InspectionReport `json:"inspection,omitempty"`
+	ReviewExpiresAt *time.Time        `json:"reviewExpiresAt,omitempty"`
 }
 
 // SubmitInput transfers ownership of InputPath and CoverPath to Manager.
@@ -324,6 +362,79 @@ func (m *Manager) Get(id, ownerHash string) (Job, error) {
 	return *job, nil
 }
 
+// ContinueReview confirms that a review-required job may be converted despite
+// its inspection findings. Repeated calls are idempotent and never enqueue the
+// same job twice.
+func (m *Manager) ContinueReview(id, ownerHash string) (Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.started {
+		return Job{}, ErrNotStarted
+	}
+	if m.closed {
+		return Job{}, ErrClosed
+	}
+	job := m.jobs[id]
+	if job == nil || job.OwnerHash != ownerHash {
+		return Job{}, ErrNotFound
+	}
+	if job.Status != StatusReviewRequired {
+		if job.AllowAnomalies {
+			return *job, nil
+		}
+		return Job{}, ErrNotReady
+	}
+
+	select {
+	case m.queue <- id:
+	default:
+		return Job{}, ErrQueueFull
+	}
+	previousPosition := job.QueuePosition
+	previousExpiry := job.ReviewExpiresAt
+	job.Status = StatusQueued
+	job.AllowAnomalies = true
+	job.ReviewExpiresAt = nil
+	job.QueuePosition = len(m.queueOrder) + 1
+	m.queueOrder = append(m.queueOrder, id)
+	m.recalculateQueuePositionsLocked()
+	if err := m.persistLocked(job); err != nil {
+		m.removeFromQueueLocked(id)
+		job.Status = StatusReviewRequired
+		job.AllowAnomalies = false
+		job.ReviewExpiresAt = previousExpiry
+		job.QueuePosition = previousPosition
+		return Job{}, fmt.Errorf("persist continued review: %w", err)
+	}
+	return *job, nil
+}
+
+// DiscardReview permanently removes a review-required job and its retained
+// source files.
+func (m *Manager) DiscardReview(id, ownerHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.started {
+		return ErrNotStarted
+	}
+	if m.closed {
+		return ErrClosed
+	}
+	job := m.jobs[id]
+	if job == nil || job.OwnerHash != ownerHash {
+		return ErrNotFound
+	}
+	if job.Status != StatusReviewRequired {
+		return ErrNotReady
+	}
+	if err := os.RemoveAll(m.jobDir(id)); err != nil {
+		return fmt.Errorf("discard review job: %w", err)
+	}
+	delete(m.jobs, id)
+	m.finishIPLocked(job)
+	return nil
+}
+
 // CanSubmit performs a read-only admission check before an HTTP handler receives
 // and validates an upload. Submit always repeats the check before taking ownership.
 func (m *Manager) CanSubmit(clientIP string) error {
@@ -402,7 +513,7 @@ func (m *Manager) Capacity() Capacity {
 		case StatusQueued:
 			active++
 			queued++
-		case StatusConverting:
+		case StatusConverting, StatusReviewRequired:
 			active++
 		}
 	}
@@ -508,6 +619,24 @@ func (m *Manager) runJob(id string) {
 		}
 	}
 	if convertErr != nil {
+		if report, ok := inspectionReportFromError(convertErr); ok && !snapshot.AllowAnomalies {
+			job.Status = StatusReviewRequired
+			job.OutputName = ""
+			job.OutputSize = 0
+			job.CompletedAt = nil
+			job.ExpiresAt = nil
+			job.PurgeAt = nil
+			job.ErrorCode = ""
+			job.Inspection = &report
+			reviewExpiresAt := now.Add(m.cfg.Retention)
+			job.ReviewExpiresAt = &reviewExpiresAt
+			_ = os.Remove(filepath.Join(m.jobDir(id), outputFile))
+			_ = os.RemoveAll(filepath.Join(m.jobDir(id), workDir))
+			_ = m.persistLocked(job)
+			_ = m.cleanupLocked(0)
+			m.promoteRecoveryLocked()
+			return
+		}
 		job.Status = StatusFailed
 		job.OutputName = ""
 		job.OutputSize = 0
@@ -520,6 +649,7 @@ func (m *Manager) runJob(id string) {
 		} else {
 			job.ErrorCode = "conversion_failed"
 		}
+		job.ReviewExpiresAt = nil
 		_ = os.Remove(filepath.Join(m.jobDir(id), outputFile))
 	}
 	m.finishIPLocked(job)
@@ -558,6 +688,16 @@ func (m *Manager) cleanupLocked(requiredFree int64) error {
 			if err := m.removeOutputLocked(job, StatusExpired); err != nil {
 				return err
 			}
+		}
+	}
+	for id, job := range m.jobs {
+		if job.Status == StatusReviewRequired && job.ReviewExpiresAt != nil &&
+			!job.ReviewExpiresAt.After(now) {
+			if err := os.RemoveAll(m.jobDir(job.ID)); err != nil {
+				return fmt.Errorf("remove expired review job: %w", err)
+			}
+			delete(m.jobs, id)
+			m.finishIPLocked(job)
 		}
 	}
 	for id, job := range m.jobs {
@@ -741,6 +881,28 @@ func (m *Manager) recoverLocked() ([]string, error) {
 				job.PurgeAt = &purgeAt
 				_ = m.persistLocked(&job)
 			}
+		case StatusReviewRequired:
+			if info, statErr := os.Stat(filepath.Join(dir, inputFile)); statErr == nil &&
+				info.Mode().IsRegular() {
+				job.QueuePosition = 0
+				if job.ReviewExpiresAt == nil {
+					reviewExpiresAt := m.cfg.Clock.Now().Add(m.cfg.Retention)
+					job.ReviewExpiresAt = &reviewExpiresAt
+					_ = m.persistLocked(&job)
+				}
+				if job.ClientKey != "" {
+					m.activeByIP[job.ClientKey]++
+				}
+			} else {
+				now := m.cfg.Clock.Now()
+				job.Status = StatusFailed
+				job.CompletedAt = &now
+				job.ReviewExpiresAt = nil
+				job.ErrorCode = "input_missing"
+				purgeAt := now.Add(m.cfg.Retention)
+				job.PurgeAt = &purgeAt
+				_ = m.persistLocked(&job)
+			}
 		case StatusSucceeded:
 			if info, statErr := os.Stat(filepath.Join(dir, outputFile)); statErr != nil ||
 				!info.Mode().IsRegular() {
@@ -851,7 +1013,8 @@ func (m *Manager) removeFromQueueLocked(id string) {
 func (m *Manager) activeCountLocked() int {
 	count := 0
 	for _, job := range m.jobs {
-		if job.Status == StatusQueued || job.Status == StatusConverting {
+		if job.Status == StatusQueued || job.Status == StatusConverting ||
+			job.Status == StatusReviewRequired {
 			count++
 		}
 	}
@@ -984,4 +1147,16 @@ func loadOrCreateIPKey(path string) ([]byte, error) {
 
 func isTerminal(status Status) bool {
 	return status == StatusFailed || status == StatusExpired || status == StatusEvicted
+}
+
+func inspectionReportFromError(err error) (InspectionReport, bool) {
+	var pointer *ReviewRequiredError
+	if errors.As(err, &pointer) && pointer != nil {
+		return pointer.Report, true
+	}
+	var value ReviewRequiredError
+	if errors.As(err, &value) {
+		return value.Report, true
+	}
+	return InspectionReport{}, false
 }

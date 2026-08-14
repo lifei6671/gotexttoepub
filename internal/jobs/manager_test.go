@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -362,6 +363,217 @@ func TestRecoveryRestoresPerIPAdmissionLimit(t *testing.T) {
 	waitForStatus(t, manager, id, "owner", StatusSucceeded)
 }
 
+func TestReviewRequiredPreservesSourcesAndReport(t *testing.T) {
+	report := testInspectionReport()
+	manager := startTestManager(t, Config{
+		DataDir:    filepath.Join(t.TempDir(), "jobs"),
+		Workers:    1,
+		QueueSize:  1,
+		PerIPLimit: 1,
+		Retention:  time.Hour,
+		Convert: func(context.Context, *Job, string, string) (string, int64, error) {
+			return "", 0, &ReviewRequiredError{Report: report}
+		},
+	})
+	input := createInput(t, "novel")
+	cover := createInput(t, "cover")
+	job, err := manager.Submit(context.Background(), SubmitInput{
+		InputPath: input,
+		CoverPath: cover,
+		ClientIP:  "192.0.2.50",
+		OwnerHash: "owner",
+	})
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	current := waitForStatus(t, manager, job.ID, job.OwnerHash, StatusReviewRequired)
+	if current.Inspection == nil || current.Inspection.Version != report.Version ||
+		len(current.Inspection.Issues) != len(report.Issues) {
+		t.Fatalf("inspection = %+v, want %+v", current.Inspection, report)
+	}
+	if current.ReviewExpiresAt == nil || current.AllowAnomalies {
+		t.Fatalf("review state = %+v", current)
+	}
+	for _, name := range []string{inputFile, coverFile} {
+		if _, err := os.Stat(filepath.Join(manager.jobDir(job.ID), name)); err != nil {
+			t.Fatalf("retained source %q missing: %v", name, err)
+		}
+	}
+	if err := manager.CanSubmit("192.0.2.50"); !errors.Is(err, ErrIPLimit) {
+		t.Fatalf("CanSubmit() error = %v, want ErrIPLimit", err)
+	}
+	capacity := manager.Capacity()
+	if capacity.Active != 1 || capacity.Queued != 0 {
+		t.Fatalf("Capacity() = %+v", capacity)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(manager.jobDir(job.ID), metaFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var durable Job
+	if err := json.Unmarshal(raw, &durable); err != nil {
+		t.Fatal(err)
+	}
+	if durable.Status != StatusReviewRequired || durable.Inspection == nil ||
+		durable.ReviewExpiresAt == nil {
+		t.Fatalf("persisted review = %+v", durable)
+	}
+}
+
+func TestContinueReviewIsIdempotentUnderConcurrency(t *testing.T) {
+	var calls atomic.Int32
+	manager := startTestManager(t, Config{
+		DataDir:   filepath.Join(t.TempDir(), "jobs"),
+		Workers:   1,
+		QueueSize: 1,
+		Convert: func(_ context.Context, job *Job, inputPath, _ string) (string, int64, error) {
+			calls.Add(1)
+			if !job.AllowAnomalies {
+				return "", 0, ReviewRequiredError{Report: testInspectionReport()}
+			}
+			return fixedOutput(32)(context.Background(), job, inputPath, "")
+		},
+	})
+	job := submitTestJob(t, manager, "192.0.2.51", "owner")
+	waitForStatus(t, manager, job.ID, job.OwnerHash, StatusReviewRequired)
+
+	const callers = 24
+	errorsFound := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			continued, err := manager.ContinueReview(job.ID, job.OwnerHash)
+			if err == nil && !continued.AllowAnomalies {
+				err = errors.New("continued job did not allow anomalies")
+			}
+			errorsFound <- err
+		}()
+	}
+	wg.Wait()
+	close(errorsFound)
+	for err := range errorsFound {
+		if err != nil {
+			t.Errorf("ContinueReview() error = %v", err)
+		}
+	}
+	waitForStatus(t, manager, job.ID, job.OwnerHash, StatusSucceeded)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("converter calls = %d, want 2", got)
+	}
+}
+
+func TestReviewRequiredRecoveryWaitsForConfirmation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "jobs")
+	first, err := NewManager(Config{
+		DataDir:   root,
+		Workers:   1,
+		QueueSize: 1,
+		Convert: func(context.Context, *Job, string, string) (string, int64, error) {
+			return "", 0, &ReviewRequiredError{Report: testInspectionReport()}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clientIP := "192.0.2.52"
+	job := submitTestJob(t, first, clientIP, "owner")
+	waitForStatus(t, first, job.ID, job.OwnerHash, StatusReviewRequired)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls atomic.Int32
+	second := startTestManager(t, Config{
+		DataDir:   root,
+		Workers:   1,
+		QueueSize: 1,
+		Convert: func(ctx context.Context, job *Job, inputPath, coverPath string) (string, int64, error) {
+			calls.Add(1)
+			return fixedOutput(32)(ctx, job, inputPath, coverPath)
+		},
+	})
+	time.Sleep(25 * time.Millisecond)
+	recovered, err := second.Get(job.ID, job.OwnerHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != StatusReviewRequired || recovered.Inspection == nil || calls.Load() != 0 {
+		t.Fatalf("recovered job = %+v, converter calls = %d", recovered, calls.Load())
+	}
+	if err := second.CanSubmit(clientIP); !errors.Is(err, ErrIPLimit) {
+		t.Fatalf("CanSubmit() recovered review error = %v, want ErrIPLimit", err)
+	}
+	if _, err := second.ContinueReview(job.ID, job.OwnerHash); err != nil {
+		t.Fatalf("ContinueReview() error = %v", err)
+	}
+	waitForStatus(t, second, job.ID, job.OwnerHash, StatusSucceeded)
+	if err := second.CanSubmit(clientIP); err != nil {
+		t.Fatalf("CanSubmit() completed review error = %v", err)
+	}
+}
+
+func TestDiscardReviewDeletesJobAndReleasesIP(t *testing.T) {
+	manager := startTestManager(t, Config{
+		DataDir:    filepath.Join(t.TempDir(), "jobs"),
+		Workers:    1,
+		QueueSize:  1,
+		PerIPLimit: 1,
+		Convert: func(context.Context, *Job, string, string) (string, int64, error) {
+			return "", 0, &ReviewRequiredError{Report: testInspectionReport()}
+		},
+	})
+	job := submitTestJob(t, manager, "192.0.2.53", "owner")
+	waitForStatus(t, manager, job.ID, job.OwnerHash, StatusReviewRequired)
+	if err := manager.DiscardReview(job.ID, "wrong-owner"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DiscardReview() wrong owner error = %v, want ErrNotFound", err)
+	}
+	if err := manager.DiscardReview(job.ID, job.OwnerHash); err != nil {
+		t.Fatalf("DiscardReview() error = %v", err)
+	}
+	if _, err := manager.Get(job.ID, job.OwnerHash); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get() error = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(manager.jobDir(job.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("discarded job directory still exists: %v", err)
+	}
+	if err := manager.CanSubmit("192.0.2.53"); err != nil {
+		t.Fatalf("CanSubmit() after discard error = %v", err)
+	}
+}
+
+func TestCleanupRemovesExpiredReview(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)}
+	manager := startTestManager(t, Config{
+		DataDir:    filepath.Join(t.TempDir(), "jobs"),
+		Workers:    1,
+		QueueSize:  1,
+		PerIPLimit: 1,
+		Retention:  time.Hour,
+		Clock:      clock,
+		Convert: func(context.Context, *Job, string, string) (string, int64, error) {
+			return "", 0, &ReviewRequiredError{Report: testInspectionReport()}
+		},
+	})
+	job := submitTestJob(t, manager, "192.0.2.54", "owner")
+	waitForStatus(t, manager, job.ID, job.OwnerHash, StatusReviewRequired)
+	clock.Add(time.Hour)
+	if err := manager.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if _, err := manager.Get(job.ID, job.OwnerHash); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get() error = %v, want ErrNotFound", err)
+	}
+	if err := manager.CanSubmit("192.0.2.54"); err != nil {
+		t.Fatalf("CanSubmit() after cleanup error = %v", err)
+	}
+}
+
 func startTestManager(t *testing.T, cfg Config) *Manager {
 	t.Helper()
 	manager, err := NewManager(cfg)
@@ -430,4 +642,27 @@ func waitForStatus(t *testing.T, manager *Manager, id, owner string, status Stat
 	job, err := manager.Get(id, owner)
 	t.Fatalf("job status = %s (%v), want %s", job.Status, err, status)
 	return Job{}
+}
+
+func testInspectionReport() InspectionReport {
+	previous := 7
+	current := 9
+	missing := 8
+	return InspectionReport{
+		Version:      "1",
+		ChapterCount: 9,
+		Issues: []InspectionIssue{{
+			Type:            "missing_chapter",
+			Severity:        "warning",
+			LineNumber:      120,
+			ChapterTitle:    "第9章",
+			Message:         "疑似缺少第8章",
+			Evidence:        "第7章 -> 第9章",
+			Detector:        "chapter_sequence",
+			PreviousChapter: &previous,
+			CurrentChapter:  &current,
+			MissingFrom:     &missing,
+			MissingTo:       &missing,
+		}},
+	}
 }

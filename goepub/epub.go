@@ -37,9 +37,14 @@ func (c *epubConverter) Convert(ctx context.Context, book *Book) error {
 	rules := book.parseRules
 	if len(book.Volumes) == 0 {
 		// 如果调用方没有预先提供卷章结构，就从 TXT 原文中实时解析。
-		if err := c.parse(ctx, book, rules); err != nil {
+		report, err := c.parse(ctx, book, rules)
+		if err != nil {
 			return err
 		}
+		book.preflightReport = report
+	}
+	if book.preflightReport != nil && len(book.preflightReport.Issues) > 0 && !book.AllowAnomalies {
+		return &PreflightError{Report: *book.preflightReport}
 	}
 
 	e, err := epublib.NewEpub(book.Name)
@@ -94,15 +99,16 @@ func (c *epubConverter) WriteTo(book *Book, e *epublib.Epub) error {
 
 // parse 负责把 TXT 文本解析成 Book.Volumes 结构。
 // 它只关心“识别标题、作者、卷、章和正文”，不直接处理 EPUB 输出。
-func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules) error {
+func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules) (*PreflightReport, error) {
+	report := newPreflightReport()
 	raw, err := os.ReadFile(book.Filename)
 	if err != nil {
-		return fmt.Errorf("读取文件失败: %s - %w", book.Filename, err)
+		return report, fmt.Errorf("读取文件失败: %s - %w", book.Filename, err)
 	}
 
 	text, detectedEncoding, err := decodeTextContent(raw, book.Encoding)
 	if err != nil {
-		return err
+		return report, err
 	}
 	log.Printf("检测到文本编码: %s", detectedEncoding)
 
@@ -121,7 +127,7 @@ func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules
 				book.detectedRulePresets = names
 				rules, err = buildParseRules(book)
 				if err != nil {
-					return err
+					return report, err
 				}
 				book.parseRules = rules
 				book.VolumeRegex = rules.VolumeRegex
@@ -146,7 +152,10 @@ func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules
 		currentCh       *Chapter
 		introLines      []string
 		collectingIntro bool
+		lineNumber      int
+		sequence        chapterSequenceTracker
 	)
+	thirdPartyDetectors := defaultThirdPartyDetectors()
 
 	flushChapter := func() {
 		if currentVol == nil || currentCh == nil {
@@ -167,8 +176,9 @@ func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules
 	}
 
 	for scanner.Scan() {
+		lineNumber++
 		if err := ctx.Err(); err != nil {
-			return err
+			return report, err
 		}
 
 		line := strings.TrimSpace(scanner.Text())
@@ -178,6 +188,12 @@ func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules
 			}
 			continue
 		}
+
+		currentChapterTitle := ""
+		if currentCh != nil {
+			currentChapterTitle = currentCh.Title
+		}
+		detectThirdPartyIssues(report, thirdPartyDetectors, lineNumber, currentChapterTitle, line)
 
 		if rules.ShouldIgnoreLine(line) {
 			continue
@@ -239,6 +255,7 @@ func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules
 			flushChapter()
 			flushVolume()
 			currentVol = &Volume{Title: line}
+			sequence.startVolume()
 			log.Printf("解析卷: %s", line)
 			continue
 		case rules.ChapterRegex != nil && rules.ChapterRegex.MatchString(line):
@@ -248,6 +265,7 @@ func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules
 			}
 			flushChapter()
 			currentCh = &Chapter{Title: line}
+			sequence.observe(report, lineNumber, line)
 			log.Printf("解析章节: %s", line)
 			continue
 		case rules.ExtraRegex != nil && rules.ExtraRegex.MatchString(line):
@@ -275,7 +293,7 @@ func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("扫描 TXT 文件失败: %w", err)
+		return report, fmt.Errorf("扫描 TXT 文件失败: %w", err)
 	}
 
 	flushChapter()
@@ -291,9 +309,9 @@ func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules
 		book.Intro = deriveIntro(book)
 	}
 	if len(book.Volumes) == 0 {
-		return errors.New("未解析到任何章节，请检查章节正则是否正确")
+		return report, errors.New("未解析到任何章节，请检查章节正则是否正确")
 	}
-	return nil
+	return report, nil
 }
 
 // applyMetadata 将 Book 中的元信息同步到 EPUB 对象。

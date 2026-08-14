@@ -275,10 +275,6 @@ func (s *Server) endSubmission(clientIP string) {
 }
 
 func (s *Server) handleConversion(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		writeAPIError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持该请求方法", 0)
-		return
-	}
 	ownerHash, err := s.ownerHash(w, r)
 	if err != nil {
 		writeAPIError(w, http.StatusUnauthorized, "SESSION_REQUIRED", "浏览器会话无效", 0)
@@ -291,16 +287,52 @@ func (s *Server) handleConversion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 1 {
-		job, err := s.manager.Get(parts[0], ownerHash)
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			job, err := s.manager.Get(parts[0], ownerHash)
+			if err != nil {
+				s.writeManagerError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, jobResponse(job))
+		case http.MethodDelete:
+			if !s.sameOriginRequest(r) {
+				writeAPIError(w, http.StatusForbidden, "ORIGIN_REJECTED", "请求来源不受信任", 0)
+				return
+			}
+			if err := s.manager.DiscardReview(parts[0], ownerHash); err != nil {
+				s.writeManagerError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			writeAPIError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持该请求方法", 0)
+		}
+		return
+	}
+	if len(parts) == 2 && parts[1] == "download" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeAPIError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "不支持该请求方法", 0)
+			return
+		}
+		s.handleDownload(w, r, parts[0], ownerHash)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "continue" {
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "请使用 POST 继续转换", 0)
+			return
+		}
+		if !s.sameOriginRequest(r) {
+			writeAPIError(w, http.StatusForbidden, "ORIGIN_REJECTED", "请求来源不受信任", 0)
+			return
+		}
+		job, err := s.manager.ContinueReview(parts[0], ownerHash)
 		if err != nil {
 			s.writeManagerError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, jobResponse(job))
-		return
-	}
-	if len(parts) == 2 && parts[1] == "download" {
-		s.handleDownload(w, r, parts[0], ownerHash)
+		writeJSON(w, http.StatusAccepted, jobResponse(job))
 		return
 	}
 	http.NotFound(w, r)
@@ -488,32 +520,36 @@ func safeLogPath(path string) string {
 }
 
 type responseJob struct {
-	ID            string     `json:"id"`
-	OriginalName  string     `json:"originalName"`
-	InputSize     int64      `json:"inputSize"`
-	Status        string     `json:"status"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	CompletedAt   *time.Time `json:"completedAt,omitempty"`
-	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
-	QueuePosition int        `json:"queuePosition,omitempty"`
-	OutputName    string     `json:"outputName,omitempty"`
-	OutputSize    int64      `json:"outputSize,omitempty"`
-	ErrorCode     string     `json:"errorCode,omitempty"`
+	ID              string                 `json:"id"`
+	OriginalName    string                 `json:"originalName"`
+	InputSize       int64                  `json:"inputSize"`
+	Status          string                 `json:"status"`
+	CreatedAt       time.Time              `json:"createdAt"`
+	CompletedAt     *time.Time             `json:"completedAt,omitempty"`
+	ExpiresAt       *time.Time             `json:"expiresAt,omitempty"`
+	ReviewExpiresAt *time.Time             `json:"reviewExpiresAt,omitempty"`
+	QueuePosition   int                    `json:"queuePosition,omitempty"`
+	OutputName      string                 `json:"outputName,omitempty"`
+	OutputSize      int64                  `json:"outputSize,omitempty"`
+	ErrorCode       string                 `json:"errorCode,omitempty"`
+	Inspection      *jobs.InspectionReport `json:"inspection,omitempty"`
 }
 
 func jobResponse(job jobs.Job) responseJob {
 	return responseJob{
-		ID:            job.ID,
-		OriginalName:  job.OriginalName,
-		InputSize:     job.InputSize,
-		Status:        string(job.Status),
-		CreatedAt:     job.CreatedAt,
-		CompletedAt:   job.CompletedAt,
-		ExpiresAt:     job.ExpiresAt,
-		QueuePosition: job.QueuePosition,
-		OutputName:    job.OutputName,
-		OutputSize:    job.OutputSize,
-		ErrorCode:     job.ErrorCode,
+		ID:              job.ID,
+		OriginalName:    job.OriginalName,
+		InputSize:       job.InputSize,
+		Status:          string(job.Status),
+		CreatedAt:       job.CreatedAt,
+		CompletedAt:     job.CompletedAt,
+		ExpiresAt:       job.ExpiresAt,
+		ReviewExpiresAt: job.ReviewExpiresAt,
+		QueuePosition:   job.QueuePosition,
+		OutputName:      job.OutputName,
+		OutputSize:      job.OutputSize,
+		ErrorCode:       job.ErrorCode,
+		Inspection:      job.Inspection,
 	}
 }
 

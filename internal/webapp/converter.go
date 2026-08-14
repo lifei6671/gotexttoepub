@@ -3,6 +3,7 @@ package webapp
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 )
 
 // ConvertEPUB 将任务目录中的受信任输入交给现有转换器，并原子发布最终文件。
-func ConvertEPUB(ctx context.Context, _ *jobs.Job, inputPath, coverPath string) (string, int64, error) {
+func ConvertEPUB(ctx context.Context, job *jobs.Job, inputPath, coverPath string) (string, int64, error) {
 	jobDir := filepath.Dir(inputPath)
 	workDir := filepath.Join(jobDir, "work")
 	if err := os.RemoveAll(workDir); err != nil {
@@ -27,11 +28,16 @@ func ConvertEPUB(ctx context.Context, _ *jobs.Job, inputPath, coverPath string) 
 	}()
 
 	book := &goepub.Book{
-		Filename: inputPath,
-		Cover:    coverPath,
-		Output:   workDir,
+		Filename:       inputPath,
+		Cover:          coverPath,
+		Output:         workDir,
+		AllowAnomalies: job != nil && job.AllowAnomalies,
 	}
 	if err := goepub.NewEPUBConverter().Convert(ctx, book); err != nil {
+		var preflightErr *goepub.PreflightError
+		if errors.As(err, &preflightErr) && preflightErr != nil {
+			return "", 0, &jobs.ReviewRequiredError{Report: inspectionReport(preflightErr.Report)}
+		}
 		return "", 0, fmt.Errorf("转换 EPUB 失败: %w", err)
 	}
 
@@ -66,6 +72,31 @@ func ConvertEPUB(ctx context.Context, _ *jobs.Job, inputPath, coverPath string) 
 		return "", 0, fmt.Errorf("读取 EPUB 信息失败: %w", err)
 	}
 	return outputName, info.Size(), nil
+}
+
+func inspectionReport(report goepub.PreflightReport) jobs.InspectionReport {
+	issues := make([]jobs.InspectionIssue, len(report.Issues))
+	for index, issue := range report.Issues {
+		issues[index] = jobs.InspectionIssue{
+			Type:            issue.Type,
+			Severity:        issue.Severity,
+			LineNumber:      issue.LineNumber,
+			ChapterTitle:    issue.ChapterTitle,
+			Message:         issue.Message,
+			Evidence:        issue.Evidence,
+			Detector:        issue.Detector,
+			PreviousChapter: issue.PreviousChapter,
+			CurrentChapter:  issue.CurrentChapter,
+			MissingFrom:     issue.MissingFrom,
+			MissingTo:       issue.MissingTo,
+		}
+	}
+	return jobs.InspectionReport{
+		Version:      report.Version,
+		ChapterCount: report.ChapterCount,
+		Issues:       issues,
+		Truncated:    report.Truncated,
+	}
 }
 
 func validateEPUB(path string) error {

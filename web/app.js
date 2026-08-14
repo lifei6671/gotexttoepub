@@ -10,6 +10,7 @@ const STAGES = ["uploading", "queued", "converting", "succeeded"];
 const statusLabels = {
   uploading: "正在上传",
   queued: "等待中",
+  review_required: "等待确认",
   converting: "转换中",
   succeeded: "可以下载",
   failed: "转换失败",
@@ -59,6 +60,14 @@ const elements = {
   statusSeal: document.getElementById("statusSeal"),
   statusTitle: document.getElementById("statusTitle"),
   statusMessage: document.getElementById("statusMessage"),
+  inspectionCard: document.getElementById("inspectionCard"),
+  inspectionCount: document.getElementById("inspectionCount"),
+  inspectionSummary: document.getElementById("inspectionSummary"),
+  inspectionList: document.getElementById("inspectionList"),
+  inspectionExpiry: document.getElementById("inspectionExpiry"),
+  inspectionError: document.getElementById("inspectionError"),
+  continueConversion: document.getElementById("continueConversion"),
+  discardConversion: document.getElementById("discardConversion"),
   downloadCard: document.getElementById("downloadCard"),
   downloadName: document.getElementById("downloadName"),
   downloadMeta: document.getElementById("downloadMeta"),
@@ -76,6 +85,8 @@ elements.clearCoverFile.addEventListener("click", clearSelectedCoverFile);
 elements.coverUrl.addEventListener("input", updateCoverFromUrl);
 elements.coverPreviewImage.addEventListener("error", handleCoverPreviewError);
 elements.clearHistory.addEventListener("click", clearHistory);
+elements.continueConversion.addEventListener("click", continueConversion);
+elements.discardConversion.addEventListener("click", discardConversion);
 elements.fileDrop.addEventListener("dragover", handleDragOver);
 elements.fileDrop.addEventListener("dragleave", handleDragLeave);
 elements.fileDrop.addEventListener("drop", handleDrop);
@@ -583,6 +594,7 @@ async function pollJob(id) {
       outputName: payload.outputName || payload.fileName || existing.outputName,
       outputSize: payload.outputSize ?? payload.fileSize ?? existing.outputSize,
       errorCode: payload.errorCode || payload.code || existing.errorCode,
+      reviewExpiresAt: payload.reviewExpiresAt || existing.reviewExpiresAt,
     });
     upsertHistory(record);
 
@@ -632,9 +644,11 @@ function applyJob(payload, record) {
     outputSize: record.outputSize,
     expiresAt: record.expiresAt,
     errorCode: record.errorCode,
+    inspection: payload.inspection,
+    reviewExpiresAt: record.reviewExpiresAt,
   });
 
-  if (TERMINAL_STATUSES.has(status)) {
+  if (TERMINAL_STATUSES.has(status) || status === "review_required") {
     setSubmitting(false);
   }
 }
@@ -643,7 +657,7 @@ function updateProgress(status, details = {}) {
   const normalized = normalizeStatus(status) || "failed";
   const effectiveStage = normalized === "failed" || normalized === "expired" || normalized === "evicted"
     ? terminalStageFromHistory()
-    : normalized;
+    : normalized === "review_required" ? "converting" : normalized;
   const stageIndex = Math.max(0, STAGES.indexOf(effectiveStage));
 
   elements.spineProgress.querySelectorAll("li").forEach((item, index) => {
@@ -660,6 +674,7 @@ function updateProgress(status, details = {}) {
     normalized === "failed" || normalized === "expired" || normalized === "evicted"
   );
   elements.downloadCard.hidden = normalized !== "succeeded";
+  elements.inspectionCard.hidden = normalized !== "review_required";
   elements.progressTitle.textContent = progressHeading(normalized);
 
   if (normalized === "uploading") {
@@ -696,6 +711,14 @@ function updateProgress(status, details = {}) {
     elements.statusTitle.textContent = "电子书装订完成";
     elements.statusMessage.textContent = details.message || "成品已经就绪，请在失效前下载保存。";
     showDownload(details);
+  } else if (normalized === "review_required") {
+    elements.uploadProgress.textContent = "上传完成";
+    elements.queueProgress.textContent = "排队完成";
+    elements.convertProgress.textContent = "等待确认";
+    elements.statusSeal.textContent = "审";
+    elements.statusTitle.textContent = "请确认文稿异常";
+    elements.statusMessage.textContent = "转换已暂停。你可以查看证据后继续，或修正文稿再重新上传。";
+    showInspection(details.inspection, details.reviewExpiresAt);
   } else {
     elements.statusSeal.textContent = normalized === "failed" ? "误" : "止";
     elements.statusTitle.textContent = statusLabels[normalized] || "任务已停止";
@@ -715,10 +738,170 @@ function showProgressPanel() {
   elements.progressPanel.hidden = false;
   elements.jobId.textContent = "待分配";
   elements.downloadCard.hidden = true;
+  elements.inspectionCard.hidden = true;
+  elements.inspectionError.hidden = true;
   resetStageText();
   window.requestAnimationFrame(() => {
     elements.progressPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   });
+}
+
+function showInspection(inspection, reviewExpiresAt) {
+  const report = inspection && typeof inspection === "object" ? inspection : {};
+  const issues = Array.isArray(report.issues) ? report.issues : [];
+  elements.inspectionCount.textContent = `${issues.length} 项`;
+  elements.inspectionSummary.textContent = issues.length > 0
+    ? `检测到 ${issues.length} 项疑似异常。系统不会自动修改文稿，请核对后决定是否继续。`
+    : "检测到疑似异常。系统不会自动修改文稿，请核对后决定是否继续。";
+  elements.inspectionList.replaceChildren();
+
+  const fragment = document.createDocumentFragment();
+  issues.forEach((issue, index) => {
+    const item = document.createElement("li");
+    item.className = "inspection-issue";
+
+    const title = document.createElement("strong");
+    title.textContent = stringValue(issue.message) || inspectionIssueTitle(issue.type, index);
+    item.appendChild(title);
+
+    const location = inspectionIssueLocation(issue);
+    if (location) {
+      const meta = document.createElement("span");
+      meta.textContent = location;
+      item.appendChild(meta);
+    }
+
+    const evidenceText = stringValue(issue.evidence);
+    if (evidenceText) {
+      const evidence = document.createElement("code");
+      evidence.textContent = evidenceText;
+      item.appendChild(evidence);
+    }
+    fragment.appendChild(item);
+  });
+  elements.inspectionList.appendChild(fragment);
+
+  if (report.truncated) {
+    const truncated = document.createElement("li");
+    truncated.className = "inspection-issue";
+    truncated.textContent = "异常较多，报告仅展示前一部分。";
+    elements.inspectionList.appendChild(truncated);
+  }
+  elements.inspectionExpiry.textContent = reviewExpiresAt
+    ? `请在 ${formatDate(reviewExpiresAt)} 前处理，逾期任务会自动清理。`
+    : "请尽快处理，等待确认的任务会在超时后自动清理。";
+  elements.inspectionError.hidden = true;
+  setReviewActionsDisabled(false);
+}
+
+function inspectionIssueTitle(type, index) {
+  const labels = {
+    missing_chapter: "疑似缺少章节",
+    duplicate_chapter: "疑似章节重复",
+    chapter_out_of_order: "疑似章节乱序",
+    third_party_ad: "疑似第三方广告或网站内容",
+  };
+  return labels[stringValue(type)] || `疑似异常 ${index + 1}`;
+}
+
+function inspectionIssueLocation(issue) {
+  const parts = [];
+  const lineNumber = numberValue(issue.lineNumber);
+  if (lineNumber > 0) {
+    parts.push(`原文第 ${lineNumber} 行`);
+  }
+  const chapterTitle = stringValue(issue.chapterTitle);
+  if (chapterTitle) {
+    parts.push(chapterTitle);
+  }
+  const previous = optionalNumber(issue.previousChapter);
+  const current = optionalNumber(issue.currentChapter);
+  if (previous !== null && current !== null) {
+    parts.push(`章节 ${previous} → ${current}`);
+  }
+  const missingFrom = optionalNumber(issue.missingFrom);
+  const missingTo = optionalNumber(issue.missingTo);
+  if (missingFrom !== null && missingTo !== null) {
+    parts.push(missingFrom === missingTo ? `疑似缺少第 ${missingFrom} 章` : `疑似缺少第 ${missingFrom}—${missingTo} 章`);
+  }
+  return parts.join(" · ");
+}
+
+async function continueConversion() {
+  const id = state.currentJobId;
+  if (!id) {
+    return;
+  }
+  setReviewActionsDisabled(true);
+  elements.inspectionError.hidden = true;
+  try {
+    const response = await fetch(`/api/conversions/${encodeURIComponent(id)}/continue`, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    const payload = await safeJson(response);
+    if (!response.ok) {
+      throw new Error(readableError(payload, response.status));
+    }
+    const existing = findHistory(id) || { id };
+    const record = sanitizeRecord({
+      ...existing,
+      status: payload.status || "queued",
+      reviewExpiresAt: "",
+    });
+    upsertHistory(record);
+    elements.inspectionCard.hidden = true;
+    setSubmitting(true);
+    applyJob(payload, record);
+    if (ACTIVE_STATUSES.has(record.status)) {
+      schedulePoll(id);
+    }
+    loadCapacity();
+  } catch (error) {
+    elements.inspectionError.textContent = error instanceof Error ? error.message : "无法继续转换，请稍后重试。";
+    elements.inspectionError.hidden = false;
+    setReviewActionsDisabled(false);
+  }
+}
+
+async function discardConversion() {
+  const id = state.currentJobId;
+  if (!id) {
+    return;
+  }
+  setReviewActionsDisabled(true);
+  elements.inspectionError.hidden = true;
+  try {
+    const response = await fetch(`/api/conversions/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      const payload = await safeJson(response);
+      throw new Error(readableError(payload, response.status));
+    }
+    state.history = state.history.filter((record) => record.id !== id);
+    saveHistory();
+    renderHistory();
+    state.currentJobId = "";
+    elements.inspectionCard.hidden = true;
+    elements.progressPanel.hidden = true;
+    setSubmitting(false);
+    loadCapacity();
+  } catch (error) {
+    elements.inspectionError.textContent = error instanceof Error ? error.message : "无法放弃任务，请稍后重试。";
+    elements.inspectionError.hidden = false;
+    setReviewActionsDisabled(false);
+  }
+}
+
+function setReviewActionsDisabled(disabled) {
+  elements.continueConversion.disabled = disabled;
+  elements.discardConversion.disabled = disabled;
 }
 
 function resetStageText() {
@@ -775,7 +958,7 @@ async function loadCapacity() {
 
 async function refreshHistoryStatuses() {
   const refreshableRecords = state.history.filter(
-    (item) => ACTIVE_STATUSES.has(item.status) || item.status === "succeeded"
+    (item) => ACTIVE_STATUSES.has(item.status) || item.status === "review_required" || item.status === "succeeded"
   );
   if (refreshableRecords.length === 0) {
     return;
@@ -801,6 +984,7 @@ async function refreshHistoryStatuses() {
     record.outputName = stringValue(payload.outputName || payload.fileName) || record.outputName;
     record.outputSize = numberValue(payload.outputSize ?? payload.fileSize) || record.outputSize;
     record.errorCode = stringValue(payload.errorCode || payload.code) || record.errorCode;
+    record.reviewExpiresAt = stringValue(payload.reviewExpiresAt) || record.reviewExpiresAt;
   }));
 
   saveHistory();
@@ -851,6 +1035,7 @@ function sanitizeRecord(record) {
     outputName: stringValue(record.outputName),
     outputSize: numberValue(record.outputSize),
     errorCode: stringValue(record.errorCode),
+    reviewExpiresAt: stringValue(record.reviewExpiresAt),
   };
 }
 
@@ -897,6 +1082,16 @@ function renderHistory() {
       if (record.outputName) {
         download.setAttribute("download", record.outputName);
       }
+    } else if (record.status === "review_required") {
+      download.textContent = "查看异常";
+      download.href = "#";
+      download.addEventListener("click", (event) => {
+        event.preventDefault();
+        state.currentJobId = record.id;
+        showProgressPanel();
+        elements.jobId.textContent = shortId(record.id);
+        pollJob(record.id);
+      });
     } else {
       download.hidden = true;
     }
@@ -925,6 +1120,7 @@ function normalizeStatus(value) {
   return [
     "uploading",
     "queued",
+    "review_required",
     "converting",
     "succeeded",
     "failed",
@@ -945,6 +1141,9 @@ function terminalStageFromHistory() {
 }
 
 function progressHeading(status) {
+  if (status === "review_required") {
+    return "文稿等待确认";
+  }
   if (status === "succeeded") {
     return "装订完成";
   }
@@ -1038,6 +1237,14 @@ function shortId(id) {
 function numberValue(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function stringValue(value) {

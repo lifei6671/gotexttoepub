@@ -156,6 +156,24 @@
         </div>
       </div>
 
+      <section class="inspection-card" id="inspectionCard" aria-labelledby="inspectionTitle" hidden>
+        <div class="inspection-heading">
+          <div>
+            <span class="inspection-label">TEXT INSPECTION</span>
+            <h3 id="inspectionTitle">检测到文稿异常</h3>
+          </div>
+          <span class="inspection-count" id="inspectionCount"></span>
+        </div>
+        <p class="inspection-summary" id="inspectionSummary"></p>
+        <ol class="inspection-list" id="inspectionList"></ol>
+        <p class="inspection-expiry" id="inspectionExpiry"></p>
+        <p class="inspection-error" id="inspectionError" role="alert" hidden></p>
+        <div class="inspection-actions">
+          <button class="inspection-continue" id="continueConversion" type="button">仍然继续转换</button>
+          <button class="inspection-discard" id="discardConversion" type="button">放弃并修正 TXT</button>
+        </div>
+      </section>
+
       <div class="download-card" id="downloadCard" hidden>
         <div>
           <span class="download-label">YOUR BOOK IS READY</span>

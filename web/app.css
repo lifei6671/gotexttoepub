@@ -650,6 +650,8 @@ h1 {
 .submit-button:focus-visible,
 .download-button:focus-visible,
 .text-button:focus-visible,
+.inspection-continue:focus-visible,
+.inspection-discard:focus-visible,
 .history-download:focus-visible {
   outline: 2px solid var(--cinnabar);
   outline-offset: 3px;
@@ -678,6 +680,8 @@ h1 {
 
 .progress-panel[hidden],
 .download-card[hidden],
+.inspection-card[hidden],
+.inspection-error[hidden],
 .form-error[hidden],
 .text-button[hidden] {
   display: none;
@@ -828,6 +832,145 @@ h1 {
 
 .status-note.is-error .status-seal {
   color: var(--danger);
+}
+
+.inspection-card {
+  max-width: 720px;
+  margin: 20px auto 0;
+  padding: 25px;
+  background: rgba(251, 247, 238, 0.78);
+  border: 1px solid rgba(155, 104, 40, 0.36);
+}
+
+.inspection-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.inspection-label,
+.inspection-heading h3 {
+  display: block;
+}
+
+.inspection-label {
+  color: var(--warning);
+  font-family: Georgia, serif;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+}
+
+.inspection-heading h3 {
+  margin: 6px 0 0;
+  font-family: var(--display-font);
+  font-size: 19px;
+}
+
+.inspection-count {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  color: var(--warning);
+  background: rgba(155, 104, 40, 0.09);
+  font-size: 11px;
+}
+
+.inspection-summary,
+.inspection-expiry,
+.inspection-error {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.inspection-summary {
+  margin: 15px 0;
+}
+
+.inspection-list {
+  display: grid;
+  max-height: 360px;
+  margin: 0;
+  padding: 0;
+  gap: 10px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.inspection-issue {
+  padding: 13px 15px;
+  background: rgba(155, 104, 40, 0.055);
+  border-left: 2px solid rgba(155, 104, 40, 0.55);
+}
+
+.inspection-issue strong,
+.inspection-issue span,
+.inspection-issue code {
+  display: block;
+}
+
+.inspection-issue strong {
+  font-family: var(--display-font);
+  font-size: 14px;
+}
+
+.inspection-issue span,
+.inspection-issue code {
+  margin-top: 5px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.inspection-issue code {
+  padding: 7px 9px;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  background: rgba(58, 49, 37, 0.05);
+  font-family: Consolas, "Courier New", monospace;
+  white-space: pre-wrap;
+}
+
+.inspection-expiry {
+  margin: 14px 0 0;
+  color: var(--ink-faint);
+}
+
+.inspection-error {
+  margin: 14px 0 0;
+  color: var(--danger);
+}
+
+.inspection-actions {
+  display: flex;
+  margin-top: 20px;
+  gap: 12px;
+}
+
+.inspection-continue,
+.inspection-discard {
+  min-height: 43px;
+  padding: 0 16px;
+  cursor: pointer;
+  border: 1px solid var(--cinnabar);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.inspection-continue {
+  color: var(--paper-light);
+  background: var(--cinnabar);
+}
+
+.inspection-discard {
+  color: var(--cinnabar);
+  background: transparent;
+}
+
+.inspection-continue:disabled,
+.inspection-discard:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .download-card {
@@ -1215,6 +1358,15 @@ footer span {
   .status-note {
     margin-top: 31px;
     padding: 18px;
+  }
+
+  .inspection-card {
+    padding: 20px;
+  }
+
+  .inspection-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .download-card {

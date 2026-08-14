@@ -83,6 +83,12 @@
 
 有些小说 TXT 会出现很长的一整行正文，默认 `bufio.Scanner` 很容易报错。项目内部已经放大扫描缓冲区，避免常见长行文本转换失败。
 
+### 5. 转换前文稿异常检测
+
+程序会在写入 EPUB 前检查已识别章节的编号序列，并扫描高置信度的第三方网站、来源水印和引流内容。发现疑似缺章、重复章节、章节乱序或第三方内容时，默认暂停转换并展示原文件行号和证据片段。
+
+检测结果属于启发式提示，不会自动补章、重新编号或删除原文。作者故意跳号、每卷重新编号等情况可以由用户明确确认后继续转换。
+
 ## 安装与编译
 
 ### 方式一：拉取源码后编译
@@ -128,6 +134,7 @@ Web 模式支持：
 - EPUB 从转换完成起保留 24 小时
 - 超过磁盘配额时优先删除最早完成的 EPUB
 - 服务重启后恢复尚未完成的本地任务
+- 检测到文稿异常时保留待确认任务，由用户选择继续转换或放弃并修正 TXT
 
 常用配置：
 
@@ -223,6 +230,15 @@ gotexttoepub epub \
 
 如果 `-output` 指向目录，程序会自动按书名生成最终的 `.epub` 文件。
 
+检测到异常时，交互式命令行会询问是否继续。脚本或 CI 等非交互环境默认返回错误；确认接受检测结果时，可以显式添加：
+
+```bash
+gotexttoepub epub \
+  -file="./novel.txt" \
+  -allow-anomalies \
+  -output="./novel.epub"
+```
+
 ## 参数说明
 
 ### 当前参数
@@ -255,6 +271,8 @@ gotexttoepub epub \
   - 自动探测预设的行为模式，支持 `off`、`suggest`、`apply`，默认 `suggest`
 - `-output`, `-o`
   - 输出路径，可传文件路径或目录
+- `-allow-anomalies`
+  - 检测到疑似缺章、乱序或第三方内容时仍继续转换；无法解码或未识别到章节等硬错误不受影响
 
 ### 兼容旧参数
 
@@ -280,6 +298,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"regexp"
 
 	"github.com/lifei6671/gotexttoepub/goepub"
@@ -294,7 +313,16 @@ func main() {
 		ChapterRegex: regexp.MustCompile(`^第.+章`),
 	}
 
-	_ = goepub.NewEPUBConverter().Convert(context.Background(), book)
+	err := goepub.NewEPUBConverter().Convert(context.Background(), book)
+	var preflightErr *goepub.PreflightError
+	if errors.As(err, &preflightErr) {
+		// 展示 preflightErr.Report，并在调用方明确确认后再允许继续。
+		book.AllowAnomalies = true
+		err = goepub.NewEPUBConverter().Convert(context.Background(), book)
+	}
+	if err != nil {
+		panic(err)
+	}
 }
 ```
 
@@ -326,7 +354,7 @@ err := converter.
 - 卷标题：
   - `^(第[一二三四五六七八九十百零0-9]+(卷|部|集))([\s　:：\-—].{0,30})?$`
 - 章节标题：
-  - `^((第[一二三四五六七八九十百千万零0-9]+(章|回|节))|(完本感言)).{0,40}$`
+  - `^((第[一二三四五六七八九十百千万零〇两0-9]+(章|回|节))|(完本感言)).{0,40}$`
 - 番外：
   - `^番外.{0,30}$`
 
