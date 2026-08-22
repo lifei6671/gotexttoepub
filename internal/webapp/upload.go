@@ -18,19 +18,21 @@ import (
 )
 
 var (
-	errInvalidUpload   = errors.New("上传内容无效")
-	errUploadTooLarge  = errors.New("TXT 文件超过大小限制")
-	errCoverTooLarge   = errors.New("封面文件超过大小限制")
-	errInvalidCover    = errors.New("封面文件无效")
-	maxCoverImagePixel = uint64(25_000_000)
+	errInvalidUpload    = errors.New("上传内容无效")
+	errUploadTooLarge   = errors.New("TXT 文件超过大小限制")
+	errCoverTooLarge    = errors.New("封面文件超过大小限制")
+	errInvalidCover     = errors.New("封面文件无效")
+	maxCoverImagePixel  = uint64(25_000_000)
+	legacyAutoCoverName = "自动生成封面.png"
 )
 
 type uploadedRequest struct {
-	InputPath    string
-	OriginalName string
-	InputSize    int64
-	CoverPath    string
-	CoverURL     string
+	InputPath                string
+	OriginalName             string
+	InputSize                int64
+	CoverPath                string
+	CoverURL                 string
+	LegacyAutoCoverDiscarded bool
 }
 
 func parseUpload(w http.ResponseWriter, r *http.Request, incomingDir string, maxUploadBytes, maxCoverBytes int64) (_ *uploadedRequest, retErr error) {
@@ -109,6 +111,13 @@ func parseUpload(w http.ResponseWriter, r *http.Request, incomingDir string, max
 			if err != nil {
 				return nil, err
 			}
+			if isLegacyAutoCover(part.FileName()) {
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return nil, fmt.Errorf("清理旧版自动封面失败: %w", err)
+				}
+				result.LegacyAutoCoverDiscarded = true
+				continue
+			}
 			result.CoverPath = path
 		case "cover_url":
 			if seenCoverURL || part.FileName() != "" {
@@ -134,10 +143,17 @@ func parseUpload(w http.ResponseWriter, r *http.Request, incomingDir string, max
 	if !seenFile || result.InputPath == "" {
 		return nil, fmt.Errorf("%w: 请选择 TXT 文件", errInvalidUpload)
 	}
-	if result.CoverPath != "" && result.CoverURL != "" {
+	if seenCoverFile && seenCoverURL {
 		return nil, fmt.Errorf("%w: 封面上传和封面链接不能同时使用", errInvalidUpload)
 	}
 	return &result, nil
+}
+
+// isLegacyAutoCover 识别旧版浏览器自动生成的占位封面。
+// 旧客户端会把这个固定文件名的 PNG 上传，其文字固定为“TXT · EPUB”，
+// 必须由服务端丢弃并依据解析后的作者重新绘制。
+func isLegacyAutoCover(name string) bool {
+	return cleanDisplayFilename(name) == legacyAutoCoverName
 }
 
 func writeUploadedTXT(part *multipart.Part, incomingDir string, maxUploadBytes int64) (path string, size int64, retErr error) {

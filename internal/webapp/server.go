@@ -210,6 +210,9 @@ func (s *Server) handleConversions(w http.ResponseWriter, r *http.Request) {
 	}
 	inputPath := upload.InputPath
 	coverPath := upload.CoverPath
+	if upload.LegacyAutoCoverDiscarded {
+		s.logger.Warn("忽略旧版浏览器自动封面，服务端将重新生成", "cover_source", "legacy_browser_auto")
+	}
 	defer func() {
 		if inputPath != "" {
 			_ = os.Remove(inputPath)

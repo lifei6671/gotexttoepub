@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -226,6 +227,47 @@ func TestParseUploadCoverFile(t *testing.T) {
 				t.Fatalf("cover file is unavailable: %v", statErr)
 			}
 		})
+	}
+}
+
+func TestParseUploadDiscardsLegacyBrowserAutoCover(t *testing.T) {
+	validPNG, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL1XQAAAABJRU5ErkJggg==")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	textPart, err := writer.CreateFormFile("file", "novel.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := textPart.Write([]byte("测试小说\n作者：测试作者\n第一章 开始\n正文")); err != nil {
+		t.Fatal(err)
+	}
+	coverPart, err := writer.CreateFormFile("cover_file", legacyAutoCoverName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coverPart.Write(validPNG); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	incoming := filepath.Join(t.TempDir(), "incoming")
+	req := httptest.NewRequest(http.MethodPost, "/api/conversions", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	got, err := parseUpload(httptest.NewRecorder(), req, incoming, 1024, 1024)
+	if err != nil {
+		t.Fatalf("parseUpload() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(got.InputPath) })
+	if !got.LegacyAutoCoverDiscarded {
+		t.Fatal("legacy browser auto cover was not marked as discarded")
+	}
+	if got.CoverPath != "" {
+		t.Fatalf("CoverPath = %q, want empty path for regenerated cover", got.CoverPath)
 	}
 }
 
