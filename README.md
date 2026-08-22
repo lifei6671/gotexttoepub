@@ -128,7 +128,8 @@ Web 模式支持：
 
 - 上传单个 TXT，并可上传 JPEG/PNG 封面或填写 HTTPS 封面链接
 - 上传时会将 UTF-8 BOM、带 BOM 的 UTF-16 LE/BE 和 GBK/GB18030 文本统一为 UTF-8；无法识别或损坏的编码会提示失败
-- 未提供封面时，服务端会在识别 TXT 的书名和作者后生成 SVG 题签封面
+- 未提供封面时，服务端会在识别 TXT 的书名和作者后生成 PNG 题签封面
+- 自动封面内嵌 Noto Sans CJK SC 字体，适用于不安装中文字体的 Linux；字体采用 SIL Open Font License 1.1，许可证见 `goepub/CoverFonts/OFL.txt`
 - 有界等待队列和全局转换并发限制
 - 默认每个 IP 同时只允许一个排队或转换任务；等待确认不会占用转换容量
 - 浏览器本地保存最近 30 条转换历史

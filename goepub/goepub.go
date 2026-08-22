@@ -21,6 +21,18 @@ var embeddedFonts embed.FS
 //go:embed Styles
 var embeddedStyles embed.FS
 
+//go:embed CoverFonts/NotoSansCJKsc-Regular.otf
+var defaultCoverFont []byte
+
+// DefaultCoverFont 返回服务端自动封面使用的内置中文字体数据。
+// 调用方只应将其用于本地渲染，避免依赖部署机器是否安装中文字体。
+func DefaultCoverFont() ([]byte, error) {
+	if len(defaultCoverFont) == 0 {
+		return nil, fmt.Errorf("内置封面字体为空")
+	}
+	return append([]byte(nil), defaultCoverFont...), nil
+}
+
 type epub struct {
 	book Book
 }

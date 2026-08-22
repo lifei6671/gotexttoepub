@@ -231,13 +231,13 @@ function refreshCoverPresentation() {
       "auto",
       "",
       "将由服务端生成默认封面",
-      "服务端会解析 TXT 中的书名和作者，再生成 SVG 封面并写入 EPUB。",
+      "服务端会解析 TXT 中的书名和作者，再生成 PNG 封面并写入 EPUB。",
       ""
     );
     return;
   }
 
-  showCoverPreview("auto", "", "将由服务端生成默认封面", "选择 TXT 后，服务端会识别书名和作者后再生成 SVG 封面。", "");
+  showCoverPreview("auto", "", "将由服务端生成默认封面", "选择 TXT 后，服务端会识别书名和作者后再生成 PNG 封面。", "");
 }
 
 function showCoverPreview(source, imageUrl, title, description, alt) {

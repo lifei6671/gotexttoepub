@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -399,9 +400,9 @@ func TestConvertEPUBWritesFixedPrivateOutput(t *testing.T) {
 	if len(reader.File) == 0 {
 		t.Fatal("EPUB zip contains no entries")
 	}
-	var coverSVG string
+	var coverPNG []byte
 	for _, entry := range reader.File {
-		if !strings.HasSuffix(entry.Name, ".svg") {
+		if !strings.HasSuffix(entry.Name, ".png") {
 			continue
 		}
 		file, openErr := entry.Open()
@@ -416,11 +417,18 @@ func TestConvertEPUBWritesFixedPrivateOutput(t *testing.T) {
 		if closeErr != nil {
 			t.Fatal(closeErr)
 		}
-		coverSVG = string(content)
+		coverPNG = content
 		break
 	}
-	if !strings.Contains(coverSVG, "作者：测试者") {
-		t.Fatalf("generated SVG cover does not contain detected author: %s", coverSVG)
+	if len(coverPNG) == 0 {
+		t.Fatal("EPUB does not contain generated PNG cover")
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(coverPNG))
+	if err != nil {
+		t.Fatalf("decode generated EPUB cover: %v", err)
+	}
+	if format != "png" || config.Width != autoCoverWidth || config.Height != autoCoverHeight {
+		t.Fatalf("generated EPUB cover = %s %dx%d, want png %dx%d", format, config.Width, config.Height, autoCoverWidth, autoCoverHeight)
 	}
 }
 
