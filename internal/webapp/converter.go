@@ -33,6 +33,9 @@ func ConvertEPUB(ctx context.Context, job *jobs.Job, inputPath, coverPath string
 		Output:         workDir,
 		AllowAnomalies: job != nil && job.AllowAnomalies,
 	}
+	if strings.TrimSpace(coverPath) == "" {
+		book.AutoCover = newAutoCoverGenerator(workDir)
+	}
 	if err := goepub.NewEPUBConverter().Convert(ctx, book); err != nil {
 		var preflightErr *goepub.PreflightError
 		if errors.As(err, &preflightErr) && preflightErr != nil {

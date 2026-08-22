@@ -12,9 +12,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,18 +29,24 @@ const (
 	workDir    = "work"
 	ipKeyFile  = ".ip-hmac.key"
 	ipKeySize  = 32
+
+	defaultReviewRetention        = time.Hour
+	defaultMaxPendingReviewsPerIP = 1
+	defaultMaxPendingReviews      = 32
+	defaultMaxPendingReviewBytes  = int64(512 * 1024 * 1024)
 )
 
 var (
-	ErrNotStarted   = errors.New("job manager not started")
-	ErrClosed       = errors.New("job manager closed")
-	ErrInvalidInput = errors.New("invalid job input")
-	ErrQueueFull    = errors.New("conversion queue is full")
-	ErrIPLimit      = errors.New("IP concurrent job limit reached")
-	ErrStorageFull  = errors.New("job storage limit reached")
-	ErrNotFound     = errors.New("job not found")
-	ErrNotReady     = errors.New("job output is not ready")
-	ErrExpired      = errors.New("job output expired or evicted")
+	ErrNotStarted      = errors.New("job manager not started")
+	ErrClosed          = errors.New("job manager closed")
+	ErrInvalidInput    = errors.New("invalid job input")
+	ErrQueueFull       = errors.New("conversion queue is full")
+	ErrIPLimit         = errors.New("IP concurrent job limit reached")
+	ErrStorageFull     = errors.New("job storage limit reached")
+	ErrNotFound        = errors.New("job not found")
+	ErrNotReady        = errors.New("job output is not ready")
+	ErrExpired         = errors.New("job output expired or evicted")
+	ErrCoverGeneration = errors.New("automatic cover generation failed")
 )
 
 type Status string
@@ -136,16 +144,21 @@ type realClock struct{}
 func (realClock) Now() time.Time { return time.Now() }
 
 type Config struct {
-	DataDir         string
-	Workers         int
-	QueueSize       int
-	PerIPLimit      int
-	Retention       time.Duration
-	JobTimeout      time.Duration
-	CleanupInterval time.Duration
-	MaxDiskBytes    int64
-	Clock           Clock
-	Convert         ConvertFunc
+	DataDir                string
+	Workers                int
+	QueueSize              int
+	PerIPLimit             int
+	Retention              time.Duration
+	ReviewRetention        time.Duration
+	MaxPendingReviewsPerIP int
+	MaxPendingReviews      int
+	MaxPendingReviewBytes  int64
+	JobTimeout             time.Duration
+	CleanupInterval        time.Duration
+	MaxDiskBytes           int64
+	Clock                  Clock
+	Convert                ConvertFunc
+	Logger                 *slog.Logger
 }
 
 type Capacity struct {
@@ -177,6 +190,9 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.DataDir == "" {
 		return nil, fmt.Errorf("%w: data directory is required", ErrInvalidInput)
 	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	if cfg.Workers == 0 {
 		cfg.Workers = 2
 	}
@@ -189,6 +205,18 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.Retention == 0 {
 		cfg.Retention = 24 * time.Hour
 	}
+	if cfg.ReviewRetention == 0 {
+		cfg.ReviewRetention = defaultReviewRetention
+	}
+	if cfg.MaxPendingReviewsPerIP == 0 {
+		cfg.MaxPendingReviewsPerIP = defaultMaxPendingReviewsPerIP
+	}
+	if cfg.MaxPendingReviews == 0 {
+		cfg.MaxPendingReviews = defaultMaxPendingReviews
+	}
+	if cfg.MaxPendingReviewBytes == 0 {
+		cfg.MaxPendingReviewBytes = defaultMaxPendingReviewBytes
+	}
 	if cfg.JobTimeout == 0 {
 		cfg.JobTimeout = 10 * time.Minute
 	}
@@ -196,7 +224,9 @@ func NewManager(cfg Config) (*Manager, error) {
 		cfg.CleanupInterval = 5 * time.Minute
 	}
 	if cfg.Workers < 1 || cfg.QueueSize < 0 || cfg.PerIPLimit < 1 ||
-		cfg.Retention < 0 || cfg.JobTimeout < 0 || cfg.CleanupInterval < 0 ||
+		cfg.Retention < 0 || cfg.ReviewRetention < 0 || cfg.MaxPendingReviewsPerIP < 1 ||
+		cfg.MaxPendingReviews < 1 || cfg.MaxPendingReviewBytes < 1 ||
+		cfg.JobTimeout < 0 || cfg.CleanupInterval < 0 ||
 		cfg.MaxDiskBytes < 0 || cfg.Convert == nil {
 		return nil, fmt.Errorf("%w: invalid manager configuration", ErrInvalidInput)
 	}
@@ -384,6 +414,12 @@ func (m *Manager) ContinueReview(id, ownerHash string) (Job, error) {
 		}
 		return Job{}, ErrNotReady
 	}
+	if job.ClientKey != "" && m.activeByIP[job.ClientKey] >= m.cfg.PerIPLimit {
+		return Job{}, ErrIPLimit
+	}
+	if m.activeCountLocked() >= m.cfg.Workers+m.cfg.QueueSize {
+		return Job{}, ErrQueueFull
+	}
 
 	select {
 	case m.queue <- id:
@@ -398,8 +434,12 @@ func (m *Manager) ContinueReview(id, ownerHash string) (Job, error) {
 	job.QueuePosition = len(m.queueOrder) + 1
 	m.queueOrder = append(m.queueOrder, id)
 	m.recalculateQueuePositionsLocked()
+	if job.ClientKey != "" {
+		m.activeByIP[job.ClientKey]++
+	}
 	if err := m.persistLocked(job); err != nil {
 		m.removeFromQueueLocked(id)
+		m.finishIPLocked(job)
 		job.Status = StatusReviewRequired
 		job.AllowAnomalies = false
 		job.ReviewExpiresAt = previousExpiry
@@ -431,7 +471,6 @@ func (m *Manager) DiscardReview(id, ownerHash string) error {
 		return fmt.Errorf("discard review job: %w", err)
 	}
 	delete(m.jobs, id)
-	m.finishIPLocked(job)
 	return nil
 }
 
@@ -513,7 +552,7 @@ func (m *Manager) Capacity() Capacity {
 		case StatusQueued:
 			active++
 			queued++
-		case StatusConverting, StatusReviewRequired:
+		case StatusConverting:
 			active++
 		}
 	}
@@ -620,6 +659,26 @@ func (m *Manager) runJob(id string) {
 	}
 	if convertErr != nil {
 		if report, ok := inspectionReportFromError(convertErr); ok && !snapshot.AllowAnomalies {
+			m.cfg.Logger.Warn("转换任务等待文稿审核",
+				"job_id", job.ID,
+				"issue_count", len(report.Issues),
+			)
+			_ = os.Remove(filepath.Join(m.jobDir(id), outputFile))
+			_ = os.RemoveAll(filepath.Join(m.jobDir(id), workDir))
+			reviewErrorCode, reviewErr := m.reviewAdmissionErrorLocked(job)
+			if reviewErr != nil {
+				m.cfg.Logger.Error("检查待确认任务配额失败",
+					"job_id", job.ID,
+					"error", redactDataDir(reviewErr.Error(), m.cfg.DataDir),
+				)
+				reviewErrorCode = "review_storage_limit"
+			}
+			if reviewErrorCode != "" {
+				m.rejectReviewLocked(job, now, reviewErrorCode)
+				_ = m.cleanupLocked(0)
+				m.promoteRecoveryLocked()
+				return
+			}
 			job.Status = StatusReviewRequired
 			job.OutputName = ""
 			job.OutputSize = 0
@@ -628,11 +687,15 @@ func (m *Manager) runJob(id string) {
 			job.PurgeAt = nil
 			job.ErrorCode = ""
 			job.Inspection = &report
-			reviewExpiresAt := now.Add(m.cfg.Retention)
+			reviewExpiresAt := now.Add(m.cfg.ReviewRetention)
 			job.ReviewExpiresAt = &reviewExpiresAt
-			_ = os.Remove(filepath.Join(m.jobDir(id), outputFile))
-			_ = os.RemoveAll(filepath.Join(m.jobDir(id), workDir))
-			_ = m.persistLocked(job)
+			if err := m.persistLocked(job); err != nil {
+				m.cfg.Logger.Error("保存待确认任务失败",
+					"job_id", job.ID,
+					"error", redactDataDir(err.Error(), m.cfg.DataDir),
+				)
+			}
+			m.finishIPLocked(job)
 			_ = m.cleanupLocked(0)
 			m.promoteRecoveryLocked()
 			return
@@ -646,9 +709,16 @@ func (m *Manager) runJob(id string) {
 		job.PurgeAt = &purgeAt
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			job.ErrorCode = "timeout"
+		} else if errors.Is(convertErr, ErrCoverGeneration) {
+			job.ErrorCode = "cover_generation_failed"
 		} else {
 			job.ErrorCode = "conversion_failed"
 		}
+		m.cfg.Logger.Error("转换任务失败",
+			"job_id", job.ID,
+			"error_code", job.ErrorCode,
+			"error", redactDataDir(convertErr.Error(), m.cfg.DataDir),
+		)
 		job.ReviewExpiresAt = nil
 		_ = os.Remove(filepath.Join(m.jobDir(id), outputFile))
 	}
@@ -659,6 +729,14 @@ func (m *Manager) runJob(id string) {
 	_ = m.persistLocked(job)
 	_ = m.cleanupLocked(0)
 	m.promoteRecoveryLocked()
+}
+
+func redactDataDir(message, dataDir string) string {
+	absDataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		return message
+	}
+	return strings.ReplaceAll(message, absDataDir, "<data-dir>")
 }
 
 func (m *Manager) cleanupLoop() {
@@ -697,7 +775,6 @@ func (m *Manager) cleanupLocked(requiredFree int64) error {
 				return fmt.Errorf("remove expired review job: %w", err)
 			}
 			delete(m.jobs, id)
-			m.finishIPLocked(job)
 		}
 	}
 	for id, job := range m.jobs {
@@ -708,6 +785,9 @@ func (m *Manager) cleanupLocked(requiredFree int64) error {
 			}
 			delete(m.jobs, id)
 		}
+	}
+	if err := m.enforcePendingReviewLimitsLocked(); err != nil {
+		return err
 	}
 	if m.cfg.MaxDiskBytes <= 0 {
 		return nil
@@ -723,6 +803,27 @@ func (m *Manager) cleanupLocked(requiredFree int64) error {
 	}
 	if usage <= target {
 		return nil
+	}
+	reviewCandidates := make([]*Job, 0)
+	for _, job := range m.jobs {
+		if job.Status == StatusReviewRequired {
+			reviewCandidates = append(reviewCandidates, job)
+		}
+	}
+	sort.Slice(reviewCandidates, func(i, j int) bool {
+		return reviewCandidates[i].CreatedAt.Before(reviewCandidates[j].CreatedAt)
+	})
+	for _, job := range reviewCandidates {
+		if err := m.evictReviewLocked(job); err != nil {
+			return err
+		}
+		usage, err = directorySize(m.cfg.DataDir)
+		if err != nil {
+			return fmt.Errorf("measure job storage: %w", err)
+		}
+		if usage <= target {
+			return nil
+		}
 	}
 	candidates := make([]*Job, 0)
 	for _, job := range m.jobs {
@@ -758,6 +859,155 @@ func (m *Manager) ensureStorageLocked(incomingBytes int64) error {
 			return ErrStorageFull
 		}
 		return err
+	}
+	return nil
+}
+
+func (m *Manager) reviewAdmissionErrorLocked(job *Job) (string, error) {
+	count := 0
+	countForIP := 0
+	var bytes int64
+	for _, pending := range m.jobs {
+		if pending.Status != StatusReviewRequired {
+			continue
+		}
+		count++
+		if pending.ClientKey == job.ClientKey {
+			countForIP++
+		}
+		size, err := directorySize(m.jobDir(pending.ID))
+		if err != nil {
+			return "", fmt.Errorf("measure pending review job: %w", err)
+		}
+		bytes += size
+	}
+	if countForIP >= m.cfg.MaxPendingReviewsPerIP {
+		return "review_ip_limit", nil
+	}
+	if count >= m.cfg.MaxPendingReviews {
+		return "review_limit_reached", nil
+	}
+	currentBytes, err := directorySize(m.jobDir(job.ID))
+	if err != nil {
+		return "", fmt.Errorf("measure current review job: %w", err)
+	}
+	if bytes+currentBytes > m.cfg.MaxPendingReviewBytes {
+		return "review_storage_limit", nil
+	}
+	return "", nil
+}
+
+func (m *Manager) enforcePendingReviewLimitsLocked() error {
+	type reviewUsage struct {
+		job  *Job
+		size int64
+	}
+	usages := make([]reviewUsage, 0)
+	countByIP := make(map[string]int)
+	var bytes int64
+	for _, job := range m.jobs {
+		if job.Status != StatusReviewRequired {
+			continue
+		}
+		size, err := directorySize(m.jobDir(job.ID))
+		if err != nil {
+			return fmt.Errorf("measure pending review job: %w", err)
+		}
+		usages = append(usages, reviewUsage{job: job, size: size})
+		countByIP[job.ClientKey]++
+		bytes += size
+	}
+	sort.Slice(usages, func(i, j int) bool {
+		return usages[i].job.CreatedAt.Before(usages[j].job.CreatedAt)
+	})
+	for len(usages) > m.cfg.MaxPendingReviews || bytes > m.cfg.MaxPendingReviewBytes || hasPendingReviewIPOverflow(countByIP, m.cfg.MaxPendingReviewsPerIP) {
+		candidateIndex := 0
+		for index, usage := range usages {
+			if countByIP[usage.job.ClientKey] > m.cfg.MaxPendingReviewsPerIP {
+				candidateIndex = index
+				break
+			}
+		}
+		candidate := usages[candidateIndex]
+		if err := m.evictReviewLocked(candidate.job); err != nil {
+			return err
+		}
+		countByIP[candidate.job.ClientKey]--
+		bytes -= candidate.size
+		usages = append(usages[:candidateIndex], usages[candidateIndex+1:]...)
+	}
+	return nil
+}
+
+func hasPendingReviewIPOverflow(countByIP map[string]int, limit int) bool {
+	for _, count := range countByIP {
+		if count > limit {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) rejectReviewLocked(job *Job, now time.Time, errorCode string) {
+	job.Status = StatusFailed
+	job.OutputName = ""
+	job.OutputSize = 0
+	job.CompletedAt = timePtr(now)
+	job.ExpiresAt = nil
+	purgeAt := now.Add(m.cfg.Retention)
+	job.PurgeAt = &purgeAt
+	job.ErrorCode = errorCode
+	job.Inspection = nil
+	job.ReviewExpiresAt = nil
+	if err := removeJobSources(m.jobDir(job.ID)); err != nil {
+		m.cfg.Logger.Error("清理超限待确认任务失败",
+			"job_id", job.ID,
+			"error", redactDataDir(err.Error(), m.cfg.DataDir),
+		)
+	}
+	if err := m.persistLocked(job); err != nil {
+		m.cfg.Logger.Error("保存超限待确认任务失败",
+			"job_id", job.ID,
+			"error", redactDataDir(err.Error(), m.cfg.DataDir),
+		)
+	}
+	m.cfg.Logger.Warn("待确认任务超过配额",
+		"job_id", job.ID,
+		"error_code", errorCode,
+	)
+	m.finishIPLocked(job)
+}
+
+func (m *Manager) evictReviewLocked(job *Job) error {
+	if err := removeJobSources(m.jobDir(job.ID)); err != nil {
+		return fmt.Errorf("remove review job sources: %w", err)
+	}
+	now := m.cfg.Clock.Now()
+	job.Status = StatusEvicted
+	job.OutputName = ""
+	job.OutputSize = 0
+	job.CompletedAt = timePtr(now)
+	job.ExpiresAt = nil
+	purgeAt := now.Add(m.cfg.Retention)
+	job.PurgeAt = &purgeAt
+	job.ErrorCode = "review_storage_evicted"
+	job.Inspection = nil
+	job.ReviewExpiresAt = nil
+	if err := m.persistLocked(job); err != nil {
+		return fmt.Errorf("persist evicted review job: %w", err)
+	}
+	m.cfg.Logger.Warn("待确认任务因存储压力被清理",
+		"job_id", job.ID,
+		"error_code", job.ErrorCode,
+	)
+	return nil
+}
+
+func removeJobSources(dir string) error {
+	for _, name := range []string{inputFile, coverFile, outputFile, workDir} {
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -886,12 +1136,9 @@ func (m *Manager) recoverLocked() ([]string, error) {
 				info.Mode().IsRegular() {
 				job.QueuePosition = 0
 				if job.ReviewExpiresAt == nil {
-					reviewExpiresAt := m.cfg.Clock.Now().Add(m.cfg.Retention)
+					reviewExpiresAt := m.cfg.Clock.Now().Add(m.cfg.ReviewRetention)
 					job.ReviewExpiresAt = &reviewExpiresAt
 					_ = m.persistLocked(&job)
-				}
-				if job.ClientKey != "" {
-					m.activeByIP[job.ClientKey]++
 				}
 			} else {
 				now := m.cfg.Clock.Now()
@@ -1013,8 +1260,7 @@ func (m *Manager) removeFromQueueLocked(id string) {
 func (m *Manager) activeCountLocked() int {
 	count := 0
 	for _, job := range m.jobs {
-		if job.Status == StatusQueued || job.Status == StatusConverting ||
-			job.Status == StatusReviewRequired {
+		if job.Status == StatusQueued || job.Status == StatusConverting {
 			count++
 		}
 	}

@@ -1,12 +1,14 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +93,23 @@ func TestSubmitLimits(t *testing.T) {
 	close(unblock)
 	waitForStatus(t, manager, first.ID, first.OwnerHash, StatusSucceeded)
 	waitForStatus(t, manager, second.ID, second.OwnerHash, StatusSucceeded)
+}
+
+func TestRunJobMarksAutomaticCoverFailure(t *testing.T) {
+	manager := startTestManager(t, Config{
+		DataDir:   filepath.Join(t.TempDir(), "jobs"),
+		Workers:   1,
+		QueueSize: 1,
+		Convert: func(context.Context, *Job, string, string) (string, int64, error) {
+			return "", 0, ErrCoverGeneration
+		},
+	})
+
+	job := submitTestJob(t, manager, "192.0.2.6", "owner")
+	failed := waitForStatus(t, manager, job.ID, job.OwnerHash, StatusFailed)
+	if failed.ErrorCode != "cover_generation_failed" {
+		t.Fatalf("ErrorCode = %q, want cover_generation_failed", failed.ErrorCode)
+	}
 }
 
 func TestCleanupRetentionHonorsDownloadLease(t *testing.T) {
@@ -238,18 +257,23 @@ func TestRecoveryRequeuesInterruptedJobs(t *testing.T) {
 
 func TestCleanupPurgesTerminalJobAfterRetention(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)}
+	var logs bytes.Buffer
 	manager := startTestManager(t, Config{
 		DataDir:   filepath.Join(t.TempDir(), "jobs"),
 		Workers:   1,
 		QueueSize: 1,
 		Retention: time.Hour,
 		Clock:     clock,
+		Logger:    slog.New(slog.NewJSONHandler(&logs, nil)),
 		Convert: func(context.Context, *Job, string, string) (string, int64, error) {
 			return "", 0, errors.New("conversion failed")
 		},
 	})
 	job := submitTestJob(t, manager, "192.0.2.30", "owner")
 	waitForStatus(t, manager, job.ID, job.OwnerHash, StatusFailed)
+	if !strings.Contains(logs.String(), `"msg":"转换任务失败"`) || !strings.Contains(logs.String(), `"error_code":"conversion_failed"`) {
+		t.Fatalf("conversion failure was not logged: %s", logs.String())
+	}
 	if _, err := os.Stat(manager.jobDir(job.ID)); err != nil {
 		t.Fatalf("terminal job directory missing before retention: %v", err)
 	}
@@ -399,11 +423,11 @@ func TestReviewRequiredPreservesSourcesAndReport(t *testing.T) {
 			t.Fatalf("retained source %q missing: %v", name, err)
 		}
 	}
-	if err := manager.CanSubmit("192.0.2.50"); !errors.Is(err, ErrIPLimit) {
-		t.Fatalf("CanSubmit() error = %v, want ErrIPLimit", err)
+	if err := manager.CanSubmit("192.0.2.50"); err != nil {
+		t.Fatalf("CanSubmit() error = %v, want nil", err)
 	}
 	capacity := manager.Capacity()
-	if capacity.Active != 1 || capacity.Queued != 0 {
+	if capacity.Active != 0 || capacity.Queued != 0 {
 		t.Fatalf("Capacity() = %+v", capacity)
 	}
 
@@ -419,6 +443,97 @@ func TestReviewRequiredPreservesSourcesAndReport(t *testing.T) {
 		durable.ReviewExpiresAt == nil {
 		t.Fatalf("persisted review = %+v", durable)
 	}
+}
+
+func TestContinueReviewRechecksPerIPAdmission(t *testing.T) {
+	started := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+	manager := startTestManager(t, Config{
+		DataDir:    filepath.Join(t.TempDir(), "jobs"),
+		Workers:    1,
+		QueueSize:  1,
+		PerIPLimit: 1,
+		Convert: func(_ context.Context, job *Job, inputPath, _ string) (string, int64, error) {
+			content, err := os.ReadFile(inputPath)
+			if err != nil {
+				return "", 0, err
+			}
+			if string(content) == "review" && !job.AllowAnomalies {
+				return "", 0, ReviewRequiredError{Report: testInspectionReport()}
+			}
+			started <- struct{}{}
+			<-unblock
+			return fixedOutput(32)(context.Background(), nil, inputPath, "")
+		},
+	})
+	reviewInput := createInput(t, "review")
+	review, err := manager.Submit(context.Background(), SubmitInput{
+		InputPath: reviewInput,
+		ClientIP:  "192.0.2.55",
+		OwnerHash: "owner",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, manager, review.ID, review.OwnerHash, StatusReviewRequired)
+
+	activeInput := createInput(t, "active")
+	active, err := manager.Submit(context.Background(), SubmitInput{
+		InputPath: activeInput,
+		ClientIP:  "192.0.2.55",
+		OwnerHash: "owner",
+	})
+	if err != nil {
+		t.Fatalf("Submit() after review wait error = %v", err)
+	}
+	<-started
+	if _, err := manager.ContinueReview(review.ID, review.OwnerHash); !errors.Is(err, ErrIPLimit) {
+		t.Fatalf("ContinueReview() error = %v, want ErrIPLimit", err)
+	}
+	close(unblock)
+	waitForStatus(t, manager, active.ID, active.OwnerHash, StatusSucceeded)
+	if _, err := manager.ContinueReview(review.ID, review.OwnerHash); err != nil {
+		t.Fatalf("ContinueReview() after active job completes error = %v", err)
+	}
+	waitForStatus(t, manager, review.ID, review.OwnerHash, StatusSucceeded)
+}
+
+func TestContinueReviewRechecksQueueCapacity(t *testing.T) {
+	started := make(chan struct{}, 2)
+	unblock := make(chan struct{})
+	manager := startTestManager(t, Config{
+		DataDir:    filepath.Join(t.TempDir(), "jobs"),
+		Workers:    1,
+		QueueSize:  1,
+		PerIPLimit: 2,
+		Convert: func(_ context.Context, job *Job, inputPath, _ string) (string, int64, error) {
+			content, err := os.ReadFile(inputPath)
+			if err != nil {
+				return "", 0, err
+			}
+			if string(content) == "review" && !job.AllowAnomalies {
+				return "", 0, ReviewRequiredError{Report: testInspectionReport()}
+			}
+			started <- struct{}{}
+			<-unblock
+			return fixedOutput(32)(context.Background(), nil, inputPath, "")
+		},
+	})
+	review := submitNamedTestJob(t, manager, "review", "192.0.2.56", "owner")
+	waitForStatus(t, manager, review.ID, review.OwnerHash, StatusReviewRequired)
+	first := submitNamedTestJob(t, manager, "first", "192.0.2.57", "owner-a")
+	<-started
+	second := submitNamedTestJob(t, manager, "second", "192.0.2.58", "owner-b")
+	if _, err := manager.ContinueReview(review.ID, review.OwnerHash); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("ContinueReview() error = %v, want ErrQueueFull", err)
+	}
+	close(unblock)
+	waitForStatus(t, manager, first.ID, first.OwnerHash, StatusSucceeded)
+	waitForStatus(t, manager, second.ID, second.OwnerHash, StatusSucceeded)
+	if _, err := manager.ContinueReview(review.ID, review.OwnerHash); err != nil {
+		t.Fatalf("ContinueReview() after queue drains error = %v", err)
+	}
+	waitForStatus(t, manager, review.ID, review.OwnerHash, StatusSucceeded)
 }
 
 func TestContinueReviewIsIdempotentUnderConcurrency(t *testing.T) {
@@ -506,8 +621,8 @@ func TestReviewRequiredRecoveryWaitsForConfirmation(t *testing.T) {
 	if recovered.Status != StatusReviewRequired || recovered.Inspection == nil || calls.Load() != 0 {
 		t.Fatalf("recovered job = %+v, converter calls = %d", recovered, calls.Load())
 	}
-	if err := second.CanSubmit(clientIP); !errors.Is(err, ErrIPLimit) {
-		t.Fatalf("CanSubmit() recovered review error = %v, want ErrIPLimit", err)
+	if err := second.CanSubmit(clientIP); err != nil {
+		t.Fatalf("CanSubmit() recovered review error = %v, want nil", err)
 	}
 	if _, err := second.ContinueReview(job.ID, job.OwnerHash); err != nil {
 		t.Fatalf("ContinueReview() error = %v", err)
@@ -550,19 +665,20 @@ func TestDiscardReviewDeletesJobAndReleasesIP(t *testing.T) {
 func TestCleanupRemovesExpiredReview(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)}
 	manager := startTestManager(t, Config{
-		DataDir:    filepath.Join(t.TempDir(), "jobs"),
-		Workers:    1,
-		QueueSize:  1,
-		PerIPLimit: 1,
-		Retention:  time.Hour,
-		Clock:      clock,
+		DataDir:         filepath.Join(t.TempDir(), "jobs"),
+		Workers:         1,
+		QueueSize:       1,
+		PerIPLimit:      1,
+		Retention:       24 * time.Hour,
+		ReviewRetention: 10 * time.Minute,
+		Clock:           clock,
 		Convert: func(context.Context, *Job, string, string) (string, int64, error) {
 			return "", 0, &ReviewRequiredError{Report: testInspectionReport()}
 		},
 	})
 	job := submitTestJob(t, manager, "192.0.2.54", "owner")
 	waitForStatus(t, manager, job.ID, job.OwnerHash, StatusReviewRequired)
-	clock.Add(time.Hour)
+	clock.Add(10 * time.Minute)
 	if err := manager.Cleanup(); err != nil {
 		t.Fatalf("Cleanup() error = %v", err)
 	}
@@ -571,6 +687,128 @@ func TestCleanupRemovesExpiredReview(t *testing.T) {
 	}
 	if err := manager.CanSubmit("192.0.2.54"); err != nil {
 		t.Fatalf("CanSubmit() after cleanup error = %v", err)
+	}
+}
+
+func TestReviewAdmissionLimits(t *testing.T) {
+	tests := []struct {
+		name          string
+		firstContent  string
+		secondContent string
+		firstIP       string
+		secondIP      string
+		config        Config
+		wantErrorCode string
+	}{
+		{
+			name:          "per IP limit",
+			firstContent:  "first",
+			secondContent: "second",
+			firstIP:       "192.0.2.60",
+			secondIP:      "192.0.2.60",
+			config: Config{
+				Workers:                1,
+				QueueSize:              1,
+				MaxPendingReviewsPerIP: 1,
+				MaxPendingReviews:      3,
+				MaxPendingReviewBytes:  1 << 20,
+			},
+			wantErrorCode: "review_ip_limit",
+		},
+		{
+			name:          "global count limit",
+			firstContent:  "first",
+			secondContent: "second",
+			firstIP:       "192.0.2.61",
+			secondIP:      "192.0.2.62",
+			config: Config{
+				Workers:                1,
+				QueueSize:              1,
+				MaxPendingReviewsPerIP: 2,
+				MaxPendingReviews:      1,
+				MaxPendingReviewBytes:  1 << 20,
+			},
+			wantErrorCode: "review_limit_reached",
+		},
+		{
+			name:          "global bytes limit",
+			firstContent:  "first",
+			secondContent: strings.Repeat("x", 20_000),
+			firstIP:       "192.0.2.63",
+			secondIP:      "192.0.2.64",
+			config: Config{
+				Workers:                1,
+				QueueSize:              1,
+				MaxPendingReviewsPerIP: 2,
+				MaxPendingReviews:      3,
+				MaxPendingReviewBytes:  10_000,
+			},
+			wantErrorCode: "review_storage_limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.config.DataDir = filepath.Join(t.TempDir(), "jobs")
+			tt.config.Convert = func(context.Context, *Job, string, string) (string, int64, error) {
+				return "", 0, ReviewRequiredError{Report: testInspectionReport()}
+			}
+			manager := startTestManager(t, tt.config)
+			first := submitNamedTestJob(t, manager, tt.firstContent, tt.firstIP, "owner-a")
+			waitForStatus(t, manager, first.ID, first.OwnerHash, StatusReviewRequired)
+			second := submitNamedTestJob(t, manager, tt.secondContent, tt.secondIP, "owner-b")
+			failed := waitForStatus(t, manager, second.ID, second.OwnerHash, StatusFailed)
+			if failed.ErrorCode != tt.wantErrorCode {
+				t.Fatalf("ErrorCode = %q, want %q", failed.ErrorCode, tt.wantErrorCode)
+			}
+			if _, err := os.Stat(filepath.Join(manager.jobDir(second.ID), inputFile)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected review source stat error = %v, want not exist", err)
+			}
+		})
+	}
+}
+
+func TestCleanupEvictsOldestReviewUnderStoragePressure(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)}
+	manager := startTestManager(t, Config{
+		DataDir:      filepath.Join(t.TempDir(), "jobs"),
+		Workers:      1,
+		QueueSize:    1,
+		Clock:        clock,
+		MaxDiskBytes: 1 << 20,
+		Convert: func(context.Context, *Job, string, string) (string, int64, error) {
+			return "", 0, ReviewRequiredError{Report: testInspectionReport()}
+		},
+	})
+	first := submitNamedTestJob(t, manager, strings.Repeat("a", 4096), "192.0.2.65", "owner-a")
+	waitForStatus(t, manager, first.ID, first.OwnerHash, StatusReviewRequired)
+	clock.Add(time.Minute)
+	second := submitNamedTestJob(t, manager, strings.Repeat("b", 4096), "192.0.2.66", "owner-b")
+	waitForStatus(t, manager, second.ID, second.OwnerHash, StatusReviewRequired)
+
+	usage, err := directorySize(manager.cfg.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.cfg.MaxDiskBytes = usage - 1
+	manager.mu.Unlock()
+	if err := manager.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	evicted, err := manager.Get(first.ID, first.OwnerHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evicted.Status != StatusEvicted || evicted.ErrorCode != "review_storage_evicted" {
+		t.Fatalf("oldest review = %+v", evicted)
+	}
+	if _, err := os.Stat(filepath.Join(manager.jobDir(first.ID), inputFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("evicted review source stat error = %v, want not exist", err)
+	}
+	remaining, err := manager.Get(second.ID, second.OwnerHash)
+	if err != nil || remaining.Status != StatusReviewRequired {
+		t.Fatalf("newer review = %+v, %v", remaining, err)
 	}
 }
 
@@ -592,9 +830,13 @@ func startTestManager(t *testing.T, cfg Config) *Manager {
 }
 
 func submitTestJob(t *testing.T, manager *Manager, ip, owner string) Job {
+	return submitNamedTestJob(t, manager, "novel", ip, owner)
+}
+
+func submitNamedTestJob(t *testing.T, manager *Manager, content, ip, owner string) Job {
 	t.Helper()
 	job, err := manager.Submit(context.Background(), SubmitInput{
-		InputPath:    createInput(t, "novel"),
+		InputPath:    createInput(t, content),
 		ClientIP:     ip,
 		OwnerHash:    owner,
 		OriginalName: "novel.txt",

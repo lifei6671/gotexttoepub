@@ -127,9 +127,10 @@ http://127.0.0.1:8080
 Web 模式支持：
 
 - 上传单个 TXT，并可上传 JPEG/PNG 封面或填写 HTTPS 封面链接
-- 未提供封面时，由浏览器根据 TXT 文件名自动生成题签风封面
+- 上传时会将 UTF-8 BOM、带 BOM 的 UTF-16 LE/BE 和 GBK/GB18030 文本统一为 UTF-8；无法识别或损坏的编码会提示失败
+- 未提供封面时，服务端会在识别 TXT 的书名和作者后生成 SVG 题签封面
 - 有界等待队列和全局转换并发限制
-- 默认每个 IP 只允许一个未完成任务
+- 默认每个 IP 同时只允许一个排队或转换任务；等待确认不会占用转换容量
 - 浏览器本地保存最近 30 条转换历史
 - EPUB 从转换完成起保留 24 小时
 - 超过磁盘配额时优先删除最早完成的 EPUB
@@ -145,12 +146,18 @@ gotexttoepub serve \
   --workers=2 \
   --queue-capacity=8 \
   --per-ip-limit=1 \
+  --review-ttl=1h \
+  --pending-review-per-ip=1 \
+  --pending-review-limit=32 \
+  --pending-review-bytes=536870912 \
   --disk-quota-bytes=5368709120 \
   --max-upload-bytes=20971520
 ```
 
 所有 Web 参数也支持对应的 `GTE_*` 环境变量，完整列表可通过
 `gotexttoepub serve --help` 查看。
+
+等待确认的文稿默认保留 1 小时，不占转换队列。每个 IP 默认只能保留 1 个、全局最多 32 个且总计不超过 512 MiB；磁盘配额紧张时会优先清理最早的待确认文稿。
 
 生产部署建议：
 

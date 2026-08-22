@@ -93,6 +93,11 @@ func (tracker *chapterSequenceTracker) startVolume() {
 	tracker.volumeBoundary = true
 }
 
+// startExtra 标记番外开始。番外常有独立编号，允许其首章从第 1 章重新计数。
+func (tracker *chapterSequenceTracker) startExtra() {
+	tracker.volumeBoundary = true
+}
+
 func (tracker *chapterSequenceTracker) observe(report *PreflightReport, lineNumber int, title string) {
 	report.ChapterCount++
 	number, ok := parseChapterNumber(title)

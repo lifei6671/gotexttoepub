@@ -2,7 +2,6 @@
 
 const HISTORY_KEY = "gotexttoepub.history.v1";
 const MAX_HISTORY_ITEMS = 30;
-const AUTO_COVER_FILE_NAME = "自动生成封面.png";
 const ACTIVE_STATUSES = new Set(["uploading", "queued", "converting"]);
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "expired", "evicted"]);
 const STAGES = ["uploading", "queued", "converting", "succeeded"];
@@ -228,23 +227,17 @@ function refreshCoverPresentation() {
   }
 
   if (txtFile) {
-    try {
-      const title = titleFromFileName(txtFile.name);
-      const previewCanvas = createAutoCoverCanvas(title, 360, 480);
-      showCoverPreview(
-        "auto",
-        previewCanvas.toDataURL("image/png"),
-        "将自动生成题签封面",
-        `将以“${title}”制成 PNG 封面并随文稿上传。`,
-        `“${title}”的自动封面预览`
-      );
-    } catch {
-      showCoverPreview("auto", "", "将自动生成题签封面", "提交时会依据 TXT 文件名生成 PNG 封面。", "");
-    }
+    showCoverPreview(
+      "auto",
+      "",
+      "将由服务端生成默认封面",
+      "服务端会解析 TXT 中的书名和作者，再生成 SVG 封面并写入 EPUB。",
+      ""
+    );
     return;
   }
 
-  showCoverPreview("auto", "", "将自动生成题签封面", "选择 TXT 后，会依据文件名生成 PNG 并随文稿上传。", "");
+  showCoverPreview("auto", "", "将由服务端生成默认封面", "选择 TXT 后，服务端会识别书名和作者后再生成 SVG 封面。", "");
 }
 
 function showCoverPreview(source, imageUrl, title, description, alt) {
@@ -298,17 +291,6 @@ async function handleSubmit(event) {
   }
 
   setSubmitting(true);
-  let coverFile = uploadedCover;
-  if (!coverFile && !coverUrl) {
-    try {
-      coverFile = await createAutoCoverFile(file);
-    } catch {
-      setSubmitting(false);
-      showFormError("无法生成默认封面，请刷新页面后重试，或上传一张 JPEG/PNG 图片。");
-      return;
-    }
-  }
-
   state.currentJobId = "";
   state.pollAttempts = 0;
   showProgressPanel();
@@ -319,8 +301,8 @@ async function handleSubmit(event) {
 
   const formData = new FormData();
   formData.append("file", file, file.name);
-  if (coverFile) {
-    formData.append("cover_file", coverFile, coverFile.name);
+  if (uploadedCover) {
+    formData.append("cover_file", uploadedCover, uploadedCover.name);
   } else if (coverUrl) {
     formData.append("cover_url", coverUrl);
   }
@@ -417,120 +399,6 @@ function validateForm(file, coverFile, coverUrl) {
 function isSupportedCoverFile(file) {
   const lowerName = file.name.toLowerCase();
   return file.type === "image/jpeg" || file.type === "image/png" || /\.(jpe?g|png)$/.test(lowerName);
-}
-
-function titleFromFileName(fileName) {
-  const rawName = stringValue(fileName).replace(/\.txt$/i, "").trim();
-  const normalized = rawName.replace(/[_.-]+/g, " ").replace(/\s+/g, " ").trim();
-  const title = normalized || "未命名文稿";
-  const characters = Array.from(title);
-  return characters.length > 22 ? `${characters.slice(0, 21).join("")}…` : title;
-}
-
-function createAutoCoverCanvas(title, width, height) {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    throw new Error("Canvas is unavailable");
-  }
-
-  const seed = hashText(title);
-  const paper = "#f2ecdf";
-  const ink = "#25221d";
-  const cinnabar = "#a63b2a";
-  const margin = Math.round(width * 0.105);
-  const top = Math.round(height * 0.12);
-  const titleSize = Math.round(width * 0.105);
-
-  context.fillStyle = ink;
-  context.fillRect(0, 0, width, height);
-
-  context.fillStyle = "rgba(230, 193, 142, 0.16)";
-  context.fillRect(0, 0, width, Math.round(height * 0.22));
-  context.fillStyle = "rgba(166, 59, 42, 0.16)";
-  context.fillRect(0, Math.round(height * 0.78), width, Math.round(height * 0.22));
-
-  context.strokeStyle = "rgba(242, 236, 223, 0.42)";
-  context.lineWidth = Math.max(2, Math.round(width * 0.005));
-  context.strokeRect(margin, margin, width - margin * 2, height - margin * 2);
-  context.strokeStyle = "rgba(242, 236, 223, 0.18)";
-  context.lineWidth = Math.max(1, Math.round(width * 0.002));
-  context.strokeRect(margin + width * 0.024, margin + width * 0.024, width - (margin + width * 0.024) * 2, height - (margin + width * 0.024) * 2);
-
-  const motifX = width * (0.18 + ((seed >>> 3) % 38) / 100);
-  const motifY = height * (0.67 + ((seed >>> 9) % 12) / 100);
-  const motifRadius = width * (0.22 + ((seed >>> 15) % 9) / 100);
-  context.beginPath();
-  context.arc(motifX, motifY, motifRadius, Math.PI * 1.05, Math.PI * 1.94);
-  context.strokeStyle = "rgba(230, 193, 142, 0.64)";
-  context.lineWidth = Math.max(2, Math.round(width * 0.01));
-  context.stroke();
-  context.beginPath();
-  context.arc(width * 0.72, height * 0.6, motifRadius * 0.72, Math.PI * 0.12, Math.PI * 0.94);
-  context.strokeStyle = "rgba(166, 59, 42, 0.78)";
-  context.stroke();
-
-  context.fillStyle = paper;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.font = `700 ${titleSize}px "Songti SC", "STSong", serif`;
-  const titleLines = coverTitleLines(title);
-  const lineHeight = Math.round(titleSize * 1.38);
-  const titleStartY = top + (height * 0.2) - ((titleLines.length - 1) * lineHeight) / 2;
-  titleLines.forEach((line, index) => {
-    context.fillText(line, width / 2, titleStartY + index * lineHeight, width - margin * 2.7);
-  });
-
-  context.fillStyle = "rgba(242, 236, 223, 0.7)";
-  context.font = `600 ${Math.round(width * 0.026)}px Georgia, serif`;
-  context.fillText("TXT · EPUB", width / 2, height * 0.51);
-
-  const sealSize = Math.round(width * 0.12);
-  const sealX = width - margin - sealSize;
-  const sealY = height - margin - sealSize;
-  context.fillStyle = cinnabar;
-  context.fillRect(sealX, sealY, sealSize, sealSize);
-  context.strokeStyle = "rgba(242, 236, 223, 0.88)";
-  context.lineWidth = Math.max(1, Math.round(width * 0.003));
-  context.strokeRect(sealX + sealSize * 0.12, sealY + sealSize * 0.12, sealSize * 0.76, sealSize * 0.76);
-  context.fillStyle = paper;
-  context.font = `700 ${Math.round(sealSize * 0.46)}px "Songti SC", "STSong", serif`;
-  context.fillText("拾", sealX + sealSize / 2, sealY + sealSize * 0.54);
-
-  return canvas;
-}
-
-function coverTitleLines(title) {
-  const characters = Array.from(title);
-  if (characters.length <= 8) {
-    return [title];
-  }
-  const midpoint = Math.ceil(characters.length / 2);
-  return [characters.slice(0, midpoint).join(""), characters.slice(midpoint).join("")];
-}
-
-function hashText(value) {
-  let hash = 2166136261;
-  for (const character of value) {
-    hash ^= character.codePointAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function createAutoCoverFile(txtFile) {
-  return new Promise((resolve, reject) => {
-    const canvas = createAutoCoverCanvas(titleFromFileName(txtFile.name), 900, 1200);
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        reject(new Error("Could not create cover image"));
-        return;
-      }
-      resolve(new File([blob], AUTO_COVER_FILE_NAME, { type: "image/png" }));
-    }, "image/png");
-  });
 }
 
 function handleSubmissionError(payload, statusCode) {
@@ -989,6 +857,21 @@ async function refreshHistoryStatuses() {
 
   saveHistory();
   renderHistory();
+  resumePendingReview();
+}
+
+function resumePendingReview() {
+  if (state.currentJobId) {
+    return;
+  }
+  const pendingReview = state.history.find((record) => record.status === "review_required");
+  if (!pendingReview) {
+    return;
+  }
+  state.currentJobId = pendingReview.id;
+  showProgressPanel();
+  elements.jobId.textContent = shortId(pendingReview.id);
+  pollJob(pendingReview.id);
 }
 
 function loadHistory() {
@@ -1161,7 +1044,18 @@ function terminalMessage(status, errorCode) {
     return "这份成品已超过保留期限，请重新上传文稿转换。";
   }
   if (status === "evicted") {
+    if (errorCode === "review_storage_evicted") {
+      return "待确认文稿因服务器存储压力被清理，请重新上传。";
+    }
     return "因存储空间清理，这份较早的成品已被删除。";
+  }
+  const reviewLimitMessages = {
+    review_ip_limit: "同一网络的待确认文稿已达到上限，请先处理或等待现有任务过期。",
+    review_limit_reached: "服务器待确认文稿已达到上限，请稍后再试。",
+    review_storage_limit: "待确认文稿的存储额度已满，请稍后再试。",
+  };
+  if (reviewLimitMessages[errorCode]) {
+    return reviewLimitMessages[errorCode];
   }
   return errorCode
     ? `转换没有完成，错误码：${errorCode}。请检查文稿后重试。`

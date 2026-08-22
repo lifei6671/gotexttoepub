@@ -25,9 +25,10 @@ import (
 )
 
 const (
-	defaultDiskQuotaBytes = int64(5 * 1024 * 1024 * 1024)
-	defaultMaxUploadBytes = int64(20 * 1024 * 1024)
-	defaultMaxCoverBytes  = int64(5 * 1024 * 1024)
+	defaultDiskQuotaBytes        = int64(5 * 1024 * 1024 * 1024)
+	defaultMaxUploadBytes        = int64(20 * 1024 * 1024)
+	defaultMaxCoverBytes         = int64(5 * 1024 * 1024)
+	defaultMaxPendingReviewBytes = int64(512 * 1024 * 1024)
 )
 
 // Serve 是内嵌 Web 转换服务的命令入口。
@@ -43,8 +44,12 @@ func newServeCommand() *cli.Command {
 			&cli.StringFlag{Name: "data-dir", Value: "./data", Usage: "任务和 EPUB 数据目录", EnvVars: []string{"GTE_DATA_DIR"}},
 			&cli.IntFlag{Name: "workers", Value: 2, Usage: "全局同时转换数", EnvVars: []string{"GTE_GLOBAL_CONCURRENCY"}},
 			&cli.IntFlag{Name: "queue-capacity", Value: 8, Usage: "全局等待队列容量", EnvVars: []string{"GTE_QUEUE_CAPACITY"}},
-			&cli.IntFlag{Name: "per-ip-limit", Value: 1, Usage: "每个 IP 允许的未完成任务数", EnvVars: []string{"GTE_PER_IP_CONCURRENCY"}},
+			&cli.IntFlag{Name: "per-ip-limit", Value: 1, Usage: "每个 IP 同时排队或转换的任务数", EnvVars: []string{"GTE_PER_IP_CONCURRENCY"}},
 			&cli.DurationFlag{Name: "result-ttl", Value: 24 * time.Hour, Usage: "转换文件保留时间", EnvVars: []string{"GTE_RESULT_TTL"}},
+			&cli.DurationFlag{Name: "review-ttl", Value: time.Hour, Usage: "等待文稿确认的保留时间", EnvVars: []string{"GTE_REVIEW_TTL"}},
+			&cli.IntFlag{Name: "pending-review-per-ip", Value: 1, Usage: "每个 IP 最多保留的待确认任务数", EnvVars: []string{"GTE_PENDING_REVIEW_PER_IP"}},
+			&cli.IntFlag{Name: "pending-review-limit", Value: 32, Usage: "全局最多保留的待确认任务数", EnvVars: []string{"GTE_PENDING_REVIEW_LIMIT"}},
+			&cli.Int64Flag{Name: "pending-review-bytes", Value: defaultMaxPendingReviewBytes, Usage: "待确认任务最多占用的总字节数", EnvVars: []string{"GTE_PENDING_REVIEW_BYTES"}},
 			&cli.DurationFlag{Name: "cleanup-interval", Value: 5 * time.Minute, Usage: "过期和配额清理间隔", EnvVars: []string{"GTE_CLEANUP_INTERVAL"}},
 			&cli.DurationFlag{Name: "job-timeout", Value: 10 * time.Minute, Usage: "单次转换超时", EnvVars: []string{"GTE_JOB_TIMEOUT"}},
 			&cli.Int64Flag{Name: "disk-quota-bytes", Value: defaultDiskQuotaBytes, Usage: "数据目录最大占用字节数", EnvVars: []string{"GTE_DISK_QUOTA_BYTES"}},
@@ -79,15 +84,20 @@ func runServe(c *cli.Context) error {
 	log.SetOutput(io.Discard)
 
 	manager, err := jobs.NewManager(jobs.Config{
-		DataDir:         dataDir,
-		Workers:         c.Int("workers"),
-		QueueSize:       c.Int("queue-capacity"),
-		PerIPLimit:      c.Int("per-ip-limit"),
-		Retention:       c.Duration("result-ttl"),
-		JobTimeout:      c.Duration("job-timeout"),
-		CleanupInterval: c.Duration("cleanup-interval"),
-		MaxDiskBytes:    c.Int64("disk-quota-bytes"),
-		Convert:         webapp.ConvertEPUB,
+		DataDir:                dataDir,
+		Workers:                c.Int("workers"),
+		QueueSize:              c.Int("queue-capacity"),
+		PerIPLimit:             c.Int("per-ip-limit"),
+		Retention:              c.Duration("result-ttl"),
+		ReviewRetention:        c.Duration("review-ttl"),
+		MaxPendingReviewsPerIP: c.Int("pending-review-per-ip"),
+		MaxPendingReviews:      c.Int("pending-review-limit"),
+		MaxPendingReviewBytes:  c.Int64("pending-review-bytes"),
+		JobTimeout:             c.Duration("job-timeout"),
+		CleanupInterval:        c.Duration("cleanup-interval"),
+		MaxDiskBytes:           c.Int64("disk-quota-bytes"),
+		Convert:                webapp.ConvertEPUB,
+		Logger:                 logger,
 	})
 	if err != nil {
 		return fmt.Errorf("初始化任务管理器失败: %w", err)
@@ -173,6 +183,14 @@ func validateServeFlags(c *cli.Context) error {
 		return errors.New("--per-ip-limit 必须大于 0")
 	case c.Duration("result-ttl") <= 0:
 		return errors.New("--result-ttl 必须大于 0")
+	case c.Duration("review-ttl") <= 0:
+		return errors.New("--review-ttl 必须大于 0")
+	case c.Int("pending-review-per-ip") <= 0:
+		return errors.New("--pending-review-per-ip 必须大于 0")
+	case c.Int("pending-review-limit") <= 0:
+		return errors.New("--pending-review-limit 必须大于 0")
+	case c.Int64("pending-review-bytes") <= 0:
+		return errors.New("--pending-review-bytes 必须大于 0")
 	case c.Duration("cleanup-interval") <= 0:
 		return errors.New("--cleanup-interval 必须大于 0")
 	case c.Duration("job-timeout") <= 0:

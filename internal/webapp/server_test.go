@@ -317,6 +317,23 @@ func TestServerSetsBrowserSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestServerLogsAPIError(t *testing.T) {
+	var logs bytes.Buffer
+	server := &Server{logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeAPIError(w, http.StatusBadRequest, "INVALID_UPLOAD", "无法识别 TXT 编码", 0)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/conversions", nil)
+	recorder := httptest.NewRecorder()
+	server.middleware(handler).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(logs.String(), `"msg":"API 请求失败"`) || !strings.Contains(logs.String(), `"error_code":"INVALID_UPLOAD"`) {
+		t.Fatalf("API error was not logged: %s", logs.String())
+	}
+}
+
 func TestSameOriginRequestChecksSchemeAndConfiguredPublicOrigin(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "http://example.test/api/conversions", nil)
 	request.Header.Set("Origin", "https://example.test")
@@ -381,6 +398,29 @@ func TestConvertEPUBWritesFixedPrivateOutput(t *testing.T) {
 	defer reader.Close()
 	if len(reader.File) == 0 {
 		t.Fatal("EPUB zip contains no entries")
+	}
+	var coverSVG string
+	for _, entry := range reader.File {
+		if !strings.HasSuffix(entry.Name, ".svg") {
+			continue
+		}
+		file, openErr := entry.Open()
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		content, readErr := io.ReadAll(file)
+		closeErr := file.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		coverSVG = string(content)
+		break
+	}
+	if !strings.Contains(coverSVG, "作者：测试者") {
+		t.Fatalf("generated SVG cover does not contain detected author: %s", coverSVG)
 	}
 }
 

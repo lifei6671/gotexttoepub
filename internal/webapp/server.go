@@ -465,6 +465,17 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					writeAPIError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "服务器处理失败", 0)
 				}
 			}
+			if writer.apiErrorCode != "" {
+				s.logger.Warn("API 请求失败",
+					"request_id", requestID,
+					"trace_id", requestID,
+					"method", r.Method,
+					"path", safeLogPath(r.URL.Path),
+					"status", writer.statusCode(),
+					"error_code", writer.apiErrorCode,
+					"error_message", writer.apiErrorMessage,
+				)
+			}
 			s.logger.Info("HTTP 请求完成",
 				"request_id", requestID,
 				"trace_id", requestID,
@@ -481,8 +492,15 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 
 type statusWriter struct {
 	http.ResponseWriter
-	status int
-	bytes  int64
+	status          int
+	bytes           int64
+	apiErrorCode    string
+	apiErrorMessage string
+}
+
+func (w *statusWriter) recordAPIError(code, message string) {
+	w.apiErrorCode = code
+	w.apiErrorMessage = message
 }
 
 func (w *statusWriter) WriteHeader(status int) {
@@ -563,6 +581,9 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeAPIError(w http.ResponseWriter, status int, code, message string, retryAfter int) {
+	if recorder, ok := w.(interface{ recordAPIError(string, string) }); ok {
+		recorder.recordAPIError(code, message)
+	}
 	if retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 	}

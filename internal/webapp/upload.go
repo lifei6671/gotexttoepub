@@ -1,7 +1,6 @@
 package webapp
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"image"
@@ -173,25 +172,11 @@ func writeUploadedTXT(part *multipart.Part, incomingDir string, maxUploadBytes i
 	if err := file.Sync(); err != nil {
 		return "", 0, fmt.Errorf("同步上传文件失败: %w", err)
 	}
-	if err := validateTextSample(file); err != nil {
+	normalizedSize, err := normalizeUploadedTXT(file)
+	if err != nil {
 		return "", 0, err
 	}
-	return path, written, nil
-}
-
-func validateTextSample(file *os.File) error {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("检查 TXT 文件失败: %w", err)
-	}
-	sample := make([]byte, 8192)
-	n, err := file.Read(sample)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("检查 TXT 文件失败: %w", err)
-	}
-	if bytes.IndexByte(sample[:n], 0) >= 0 {
-		return fmt.Errorf("%w: 文件包含二进制 NUL 字节", errInvalidUpload)
-	}
-	return nil
+	return path, normalizedSize, nil
 }
 
 func writeUploadedCover(part *multipart.Part, incomingDir string, maxCoverBytes int64) (path string, retErr error) {

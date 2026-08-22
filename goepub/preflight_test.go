@@ -43,6 +43,13 @@ func TestPreflightChapterSequence(t *testing.T) {
 			wantChapters: 4,
 		},
 		{
+			name: "extra reset from one is allowed",
+			lines: []string{
+				"第一四一六章 一炮定乾坤", "正文", "番外", "第一章 寻真误入蓬莱岛，香风不动松花飘", "正文", "第二章 继续", "正文",
+			},
+			wantChapters: 3,
+		},
+		{
 			name: "continuous numbering across volumes",
 			lines: []string{
 				"第一卷 起点", "第九十九章 开始", "正文", "第一百章 继续", "正文",
@@ -100,6 +107,7 @@ func TestParseChineseNumber(t *testing.T) {
 		"一百零二":  102,
 		"二〇二":   202,
 		"两百零三":  203,
+		"一四一六":  1416,
 		"一千零一十": 1010,
 	}
 	for input, want := range tests {

@@ -46,6 +46,13 @@ func (c *epubConverter) Convert(ctx context.Context, book *Book) error {
 	if book.preflightReport != nil && len(book.preflightReport.Issues) > 0 && !book.AllowAnomalies {
 		return &PreflightError{Report: *book.preflightReport}
 	}
+	autoCoverCleanup, err := c.generateAutoCover(ctx, book)
+	if err != nil {
+		return err
+	}
+	if autoCoverCleanup != nil {
+		defer autoCoverCleanup()
+	}
 
 	e, err := epublib.NewEpub(book.Name)
 	if err != nil {
@@ -89,6 +96,27 @@ func (c *epubConverter) Convert(ctx context.Context, book *Book) error {
 		return fmt.Errorf("创建输出目录失败: %w", err)
 	}
 	return e.Write(output)
+}
+
+// generateAutoCover 在解析完成后才调用生成器，因此它能拿到 TXT 中识别出的书名和作者。
+// 显式封面始终优先，避免覆盖用户上传或指定的封面。
+func (c *epubConverter) generateAutoCover(ctx context.Context, book *Book) (func(), error) {
+	if strings.TrimSpace(book.Cover) != "" || book.AutoCover == nil {
+		return nil, nil
+	}
+
+	coverPath, cleanup, err := book.AutoCover(ctx, book.Name, book.Author)
+	if err != nil {
+		return nil, fmt.Errorf("生成自动封面失败: %w", err)
+	}
+	if strings.TrimSpace(coverPath) == "" {
+		if cleanup != nil {
+			cleanup()
+		}
+		return nil, errors.New("生成自动封面失败: 生成器未返回封面文件")
+	}
+	book.Cover = coverPath
+	return cleanup, nil
 }
 
 // WriteTo 将已经解析完成的卷章结构写入现有的 EPUB 对象。
@@ -274,6 +302,7 @@ func (c *epubConverter) parse(ctx context.Context, book *Book, rules *ParseRules
 			}
 			flushChapter()
 			currentCh = &Chapter{Title: line}
+			sequence.startExtra()
 			log.Printf("解析番外: %s", line)
 			continue
 		case rules.IsSpecialChapterTitle(line):

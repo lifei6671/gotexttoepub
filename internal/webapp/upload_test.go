@@ -3,6 +3,7 @@ package webapp
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"image"
 	"image/color"
@@ -13,6 +14,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf16"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 func TestParseUpload(t *testing.T) {
@@ -24,11 +30,19 @@ func TestParseUpload(t *testing.T) {
 		maxBytes    int64
 		wantErr     error
 		wantDisplay string
+		wantText    string
 	}{
 		{name: "有效TXT", filename: "小说.txt", content: []byte("第一章 开始\n正文"), coverURL: "https://example.com/a.jpg", maxBytes: 1024, wantDisplay: "小说.txt"},
+		{name: "有效UTF8BOM", filename: "novel.txt", content: append([]byte{0xEF, 0xBB, 0xBF}, []byte("第一章 开始\n正文")...), maxBytes: 1024, wantDisplay: "novel.txt", wantText: "第一章 开始\n正文"},
 		{name: "清理展示文件名", filename: "../bad\r\nname.txt", content: []byte("第一章"), maxBytes: 1024, wantDisplay: "badname.txt"},
 		{name: "拒绝扩展名", filename: "novel.zip", content: []byte("text"), maxBytes: 1024, wantErr: errInvalidUpload},
 		{name: "拒绝二进制", filename: "novel.txt", content: []byte{'a', 0, 'b'}, maxBytes: 1024, wantErr: errInvalidUpload},
+		{name: "自动转换UTF16LE", filename: "novel.txt", content: utf16Text(t, "第一章 开始\n正文", binary.LittleEndian), maxBytes: 1024, wantDisplay: "novel.txt", wantText: "第一章 开始\n正文"},
+		{name: "自动转换UTF16BE", filename: "novel.txt", content: utf16Text(t, "第一章 开始\n正文", binary.BigEndian), maxBytes: 1024, wantDisplay: "novel.txt", wantText: "第一章 开始\n正文"},
+		{name: "自动转换GB18030", filename: "novel.txt", content: gb18030Text(t, "第一章 开始\n正文"), maxBytes: 1024, wantDisplay: "novel.txt", wantText: "第一章 开始\n正文"},
+		{name: "自动转换CP936欧元符号", filename: "novel.txt", content: []byte{'a', 0x80, 'b'}, maxBytes: 1024, wantDisplay: "novel.txt", wantText: "a€b"},
+		{name: "拒绝损坏UTF16", filename: "novel.txt", content: []byte{0xFF, 0xFE, 0x00, 0xD8}, maxBytes: 1024, wantErr: errInvalidUpload},
+		{name: "拒绝无法识别编码", filename: "novel.txt", content: []byte{0x81, 0x30, 0x81}, maxBytes: 1024, wantErr: errInvalidUpload},
 		{name: "拒绝过大", filename: "novel.txt", content: []byte("12345"), maxBytes: 4, wantErr: errUploadTooLarge},
 	}
 
@@ -74,14 +88,48 @@ func TestParseUpload(t *testing.T) {
 			if got.OriginalName != tt.wantDisplay {
 				t.Fatalf("OriginalName = %q, want %q", got.OriginalName, tt.wantDisplay)
 			}
-			if got.InputSize != int64(len(tt.content)) {
-				t.Fatalf("InputSize = %d, want %d", got.InputSize, len(tt.content))
+			stored, readErr := os.ReadFile(got.InputPath)
+			if readErr != nil {
+				t.Fatalf("read normalized input: %v", readErr)
+			}
+			if !utf8.Valid(stored) || bytes.IndexByte(stored, 0) >= 0 {
+				t.Fatalf("stored input is not UTF-8 text: %x", stored)
+			}
+			if got.InputSize != int64(len(stored)) {
+				t.Fatalf("InputSize = %d, want stored size %d", got.InputSize, len(stored))
+			}
+			if tt.wantText != "" && string(stored) != tt.wantText {
+				t.Fatalf("stored input = %q, want %q", stored, tt.wantText)
 			}
 			if got.CoverURL != tt.coverURL {
 				t.Fatalf("CoverURL = %q, want %q", got.CoverURL, tt.coverURL)
 			}
 		})
 	}
+}
+
+func utf16Text(t *testing.T, text string, order binary.ByteOrder) []byte {
+	t.Helper()
+	units := utf16.Encode([]rune(text))
+	output := make([]byte, 2+len(units)*2)
+	if order == binary.LittleEndian {
+		output[0], output[1] = 0xFF, 0xFE
+	} else {
+		output[0], output[1] = 0xFE, 0xFF
+	}
+	for i, unit := range units {
+		order.PutUint16(output[2+i*2:], unit)
+	}
+	return output
+}
+
+func gb18030Text(t *testing.T, text string) []byte {
+	t.Helper()
+	encoded, _, err := transform.String(simplifiedchinese.GB18030.NewEncoder(), text)
+	if err != nil {
+		t.Fatalf("encode GB18030: %v", err)
+	}
+	return []byte(encoded)
 }
 
 func TestParseUploadRejectsUnknownField(t *testing.T) {

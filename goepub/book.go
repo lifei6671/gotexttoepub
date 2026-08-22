@@ -1,6 +1,7 @@
 package goepub
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -53,6 +54,10 @@ type Book struct {
 	Volumes []Volume
 	// Cover 支持本地路径或网络 URL。
 	Cover string
+	// AutoCover 会在 TXT 解析和预检通过后、写入 EPUB 前生成默认封面。
+	// 仅当 Cover 为空时调用；调用方负责返回本地文件路径及其清理函数。
+	// 命令行不会设置此字段，因此仍保持“未指定封面即不写入封面”的行为。
+	AutoCover AutoCoverFunc
 	// Lang 是 EPUB 语言标识，默认使用 zh-CN。
 	Lang string
 	// Encoding 是输入 TXT 的编码格式，默认 auto。
@@ -98,6 +103,10 @@ type Book struct {
 	detectedRulePresets []string
 	preflightReport     *PreflightReport
 }
+
+// AutoCoverFunc 根据已识别的书名和作者生成一个本地封面文件。
+// cleanup 可以为 nil；转换器会在封面写入 EPUB 后调用它。
+type AutoCoverFunc func(ctx context.Context, title, author string) (path string, cleanup func(), err error)
 
 // FullDefault 填充默认值并规范化路径。
 func (book *Book) FullDefault() error {
