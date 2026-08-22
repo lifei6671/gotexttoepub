@@ -18,6 +18,7 @@ import (
 
 	"github.com/urfave/cli/v2"
 
+	"github.com/lifei6671/gotexttoepub/internal/buildinfo"
 	"github.com/lifei6671/gotexttoepub/internal/jobs"
 	"github.com/lifei6671/gotexttoepub/internal/webapp"
 	"github.com/lifei6671/gotexttoepub/internal/websecure"
@@ -77,6 +78,7 @@ func runServe(c *cli.Context) error {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logServiceStarting(logger)
 	if !c.Bool("secure-cookie") && !isLoopbackAddress(c.String("address")) {
 		logger.Warn("服务监听在非本机地址但未启用 Secure Cookie，请仅在受控开发网络使用")
 	}
@@ -171,6 +173,10 @@ func runServe(c *cli.Context) error {
 	}
 	logger.Info("Web 服务已停止")
 	return nil
+}
+
+func logServiceStarting(logger *slog.Logger) {
+	logger.Info("服务正在启动", "version", buildinfo.Version(), "build_time", buildinfo.BuildTime())
 }
 
 func validateServeFlags(c *cli.Context) error {

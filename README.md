@@ -597,7 +597,8 @@ git push origin v1.3.0
 ```
 
 发布任务会生成 Linux、Windows 和 macOS 的 `amd64`、`arm64` 构建，
-压缩包名称和二进制内的版本号都来自标签，同时附带 SHA-256 校验文件。
+压缩包名称和二进制内的版本号都来自标签。服务启动时会以 JSON 日志输出
+`version` 和 UTC `build_time`，同时附带 SHA-256 校验文件。
 
 ## License
 

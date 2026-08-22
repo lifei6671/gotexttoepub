@@ -8,10 +8,8 @@ import (
 	"github.com/urfave/cli/v2"
 
 	"github.com/lifei6671/gotexttoepub/cmd"
+	"github.com/lifei6671/gotexttoepub/internal/buildinfo"
 )
-
-// appVersion 会在标签发布构建时通过 -ldflags 注入。
-var appVersion = "1.2"
 
 // main 负责初始化 CLI 应用并分发子命令。
 func main() {
@@ -21,7 +19,7 @@ func main() {
 	app := &cli.App{
 		Name:     "gotexttoepub",
 		Usage:    "将 TXT 小说转换为 EPUB 文件。",
-		Version:  appVersion,
+		Version:  buildinfo.Version(),
 		Commands: []*cli.Command{cmd.Start, cmd.RulesCommand, cmd.Serve, cmd.Install},
 		CommandNotFound: func(c *cli.Context, command string) {
 			commandNotFound = true
