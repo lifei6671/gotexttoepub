@@ -21,7 +21,7 @@ var embeddedFonts embed.FS
 //go:embed Styles
 var embeddedStyles embed.FS
 
-//go:embed CoverFonts/NotoSansCJKsc-Regular.otf
+//go:embed CoverFonts/NotoSerifCJKsc-Regular.otf
 var defaultCoverFont []byte
 
 // DefaultCoverFont 返回服务端自动封面使用的内置中文字体数据。
