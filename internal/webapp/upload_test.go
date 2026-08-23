@@ -115,6 +115,26 @@ func TestParseUpload(t *testing.T) {
 	}
 }
 
+func TestParseUploadReportsInterruptedStream(t *testing.T) {
+	body, contentType := multipartTXT(t, "novel.txt", "第一章 开始\n正文")
+	raw := body.Bytes()
+	if len(raw) < 8 {
+		t.Fatal("multipart fixture is unexpectedly short")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/conversions", bytes.NewReader(raw[:len(raw)-8]))
+	req.Header.Set("Content-Type", contentType)
+	incoming := filepath.Join(t.TempDir(), "incoming")
+
+	_, err := parseUpload(httptest.NewRecorder(), req, incoming, 1024, 1024)
+	if !errors.Is(err, errInvalidUpload) || !errors.Is(err, errUploadInterrupted) {
+		t.Fatalf("parseUpload() error = %v, want interrupted upload error", err)
+	}
+	entries, readErr := os.ReadDir(incoming)
+	if readErr == nil && len(entries) != 0 {
+		t.Fatalf("interrupted upload left files: %v", entries)
+	}
+}
+
 func utf16Text(t *testing.T, text string, order binary.ByteOrder) []byte {
 	t.Helper()
 	units := utf16.Encode([]rune(text))

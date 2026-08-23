@@ -18,12 +18,13 @@ import (
 )
 
 var (
-	errInvalidUpload    = errors.New("上传内容无效")
-	errUploadTooLarge   = errors.New("TXT 文件超过大小限制")
-	errCoverTooLarge    = errors.New("封面文件超过大小限制")
-	errInvalidCover     = errors.New("封面文件无效")
-	maxCoverImagePixel  = uint64(25_000_000)
-	legacyAutoCoverName = "自动生成封面.png"
+	errInvalidUpload     = errors.New("上传内容无效")
+	errUploadInterrupted = errors.New("上传未完成，网络连接已中断，请保持页面开启并检查网络后重试")
+	errUploadTooLarge    = errors.New("TXT 文件超过大小限制")
+	errCoverTooLarge     = errors.New("封面文件超过大小限制")
+	errInvalidCover      = errors.New("封面文件无效")
+	maxCoverImagePixel   = uint64(25_000_000)
+	legacyAutoCoverName  = "自动生成封面.png"
 )
 
 type uploadedRequest struct {
@@ -72,6 +73,9 @@ func parseUpload(w http.ResponseWriter, r *http.Request, incomingDir string, max
 			var maxBytesError *http.MaxBytesError
 			if errors.As(err, &maxBytesError) {
 				return nil, errUploadTooLarge
+			}
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, interruptedUploadError()
 			}
 			return nil, fmt.Errorf("%w: 读取上传内容失败", errInvalidUpload)
 		}
@@ -128,6 +132,9 @@ func parseUpload(w http.ResponseWriter, r *http.Request, incomingDir string, max
 			value, err := io.ReadAll(io.LimitReader(part, 2049))
 			_ = part.Close()
 			if err != nil {
+				if errors.Is(err, io.ErrUnexpectedEOF) {
+					return nil, interruptedUploadError()
+				}
 				return nil, fmt.Errorf("%w: 读取封面链接失败", errInvalidUpload)
 			}
 			if len(value) > 2048 {
@@ -147,6 +154,10 @@ func parseUpload(w http.ResponseWriter, r *http.Request, incomingDir string, max
 		return nil, fmt.Errorf("%w: 封面上传和封面链接不能同时使用", errInvalidUpload)
 	}
 	return &result, nil
+}
+
+func interruptedUploadError() error {
+	return fmt.Errorf("%w: %w", errInvalidUpload, errUploadInterrupted)
 }
 
 // isLegacyAutoCover 识别旧版浏览器自动生成的占位封面。
@@ -177,6 +188,9 @@ func writeUploadedTXT(part *multipart.Part, incomingDir string, maxUploadBytes i
 
 	written, err := io.Copy(file, io.LimitReader(part, maxUploadBytes+1))
 	if err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return "", 0, interruptedUploadError()
+		}
 		return "", 0, fmt.Errorf("保存上传文件失败: %w", err)
 	}
 	if written == 0 {
@@ -219,6 +233,9 @@ func writeUploadedCover(part *multipart.Part, incomingDir string, maxCoverBytes 
 
 	written, err := io.Copy(file, io.LimitReader(part, maxCoverBytes+1))
 	if err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return "", interruptedUploadError()
+		}
 		return "", fmt.Errorf("保存封面文件失败: %w", err)
 	}
 	if written == 0 {

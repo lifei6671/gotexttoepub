@@ -176,6 +176,31 @@ func TestServerStaticAssetsAreNotCached(t *testing.T) {
 	}
 }
 
+func TestServerReportsInterruptedUpload(t *testing.T) {
+	server := newReviewServer(t)
+	body, contentType := multipartTXT(t, "novel.txt", "第一章 开始\n正文")
+	raw := body.Bytes()
+	request := httptest.NewRequest(http.MethodPost, "/api/conversions", bytes.NewReader(raw[:len(raw)-8]))
+	request.Header.Set("Content-Type", contentType)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+	var response struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != "UPLOAD_INTERRUPTED" || !strings.Contains(response.Error.Message, "上传未完成") {
+		t.Fatalf("response = %#v, want retryable interrupted-upload error", response.Error)
+	}
+}
+
 // iPhone Safari 与其他浏览器都会经 FormData 提交同样的 multipart 内容。
 func TestServerAcceptsBrowserMultipartNoBOMUTF16(t *testing.T) {
 	dataDir := t.TempDir()

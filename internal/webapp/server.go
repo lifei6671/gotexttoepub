@@ -198,7 +198,18 @@ func (s *Server) handleConversions(w http.ResponseWriter, r *http.Request) {
 
 	upload, err := parseUpload(w, r, s.incomingDir, s.maxUploadBytes, s.maxCoverBytes)
 	if err != nil {
+		if errors.Is(err, errUploadInterrupted) {
+			s.logger.Warn("上传请求中断",
+				"request_id", r.Header.Get("X-Request-ID"),
+				"cf_ray", r.Header.Get("CF-Ray"),
+				"content_length", r.ContentLength,
+				"content_type", r.Header.Get("Content-Type"),
+				"error", err,
+			)
+		}
 		switch {
+		case errors.Is(err, errUploadInterrupted):
+			writeAPIError(w, http.StatusBadRequest, "UPLOAD_INTERRUPTED", publicUploadMessage(err), 0)
 		case errors.Is(err, errUploadTooLarge):
 			writeAPIError(w, http.StatusRequestEntityTooLarge, "TXT_TOO_LARGE", "TXT 文件超过大小限制", 0)
 		case errors.Is(err, errCoverTooLarge):
@@ -456,6 +467,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		requestID := randomRequestID()
 		writer := &statusWriter{ResponseWriter: w}
 		writer.Header().Set("X-Request-ID", requestID)
+		r.Header.Set("X-Request-ID", requestID)
 		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("X-Frame-Options", "DENY")
