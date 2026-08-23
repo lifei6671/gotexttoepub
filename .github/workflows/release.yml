@@ -44,6 +44,7 @@ jobs:
       - name: Verify source
         run: |
           go test ./cmd ./internal/...
+          go test ./goepub -run '^(TestPreflightChapterSequence|TestParseChineseNumber|TestPreflightThirdPartyDetection|TestDetectThirdPartyIssuesReportsOneIssuePerLine|TestEPUBConverterPreflightBlocksUnlessAllowed)$' -count=1
           go vet ./...
 
       - name: Build release archives

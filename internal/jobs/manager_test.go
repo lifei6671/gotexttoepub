@@ -536,6 +536,65 @@ func TestContinueReviewRechecksQueueCapacity(t *testing.T) {
 	waitForStatus(t, manager, review.ID, review.OwnerHash, StatusSucceeded)
 }
 
+func TestConfirmedReviewDoesNotBlockFollowingQueuedJob(t *testing.T) {
+	started := make(chan string, 2)
+	allowReview := make(chan struct{})
+	allowFollowing := make(chan struct{})
+	manager := startTestManager(t, Config{
+		DataDir:    filepath.Join(t.TempDir(), "jobs"),
+		Workers:    1,
+		QueueSize:  1,
+		PerIPLimit: 2,
+		Convert: func(_ context.Context, job *Job, inputPath, _ string) (string, int64, error) {
+			content, err := os.ReadFile(inputPath)
+			if err != nil {
+				return "", 0, err
+			}
+			switch string(content) {
+			case "review":
+				if !job.AllowAnomalies {
+					return "", 0, ReviewRequiredError{Report: testInspectionReport()}
+				}
+				started <- "review"
+				<-allowReview
+			case "following":
+				started <- "following"
+				<-allowFollowing
+			}
+			return fixedOutput(32)(context.Background(), job, inputPath, "")
+		},
+	})
+
+	review := submitNamedTestJob(t, manager, "review", "192.0.2.70", "review-owner")
+	waitForStatus(t, manager, review.ID, review.OwnerHash, StatusReviewRequired)
+
+	if _, err := manager.ContinueReview(review.ID, review.OwnerHash); err != nil {
+		t.Fatalf("ContinueReview() error = %v", err)
+	}
+	select {
+	case got := <-started:
+		if got != "review" {
+			t.Fatalf("started job = %q, want review", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("confirmed review job did not restart")
+	}
+
+	following := submitNamedTestJob(t, manager, "following", "192.0.2.71", "following-owner")
+	close(allowReview)
+	waitForStatus(t, manager, review.ID, review.OwnerHash, StatusSucceeded)
+	select {
+	case got := <-started:
+		if got != "following" {
+			t.Fatalf("started job = %q, want following", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("following queued job did not start after confirmed review completed")
+	}
+	close(allowFollowing)
+	waitForStatus(t, manager, following.ID, following.OwnerHash, StatusSucceeded)
+}
+
 func TestContinueReviewIsIdempotentUnderConcurrency(t *testing.T) {
 	var calls atomic.Int32
 	manager := startTestManager(t, Config{

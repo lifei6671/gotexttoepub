@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -21,7 +22,7 @@ var (
 )
 
 // normalizeUploadedTXT 将已落盘的 TXT 统一为 UTF-8。
-// 仅接受可以明确判定的 UTF-8、带 BOM 的 UTF-16 和语法合法的 GB18030；
+// 仅接受可以明确判定的 UTF-8、UTF-16 和语法合法的 GB18030；
 // 其他编码不能可靠识别，避免把二进制内容误当成小说正文。
 func normalizeUploadedTXT(file *os.File) (int64, error) {
 	raw, err := os.ReadFile(file.Name())
@@ -65,20 +66,70 @@ func decodeUploadedTXT(raw []byte) ([]byte, bool, error) {
 			return nil, false, fmt.Errorf("%w: UTF-16BE 文本转换失败", errInvalidUpload)
 		}
 		return []byte(text), true, nil
-	case utf8.Valid(raw):
-		if bytes.IndexByte(raw, 0) >= 0 {
+	case utf8.Valid(raw) && bytes.IndexByte(raw, 0) < 0:
+		return raw, false, nil
+	default:
+		if text, ok := decodeUTF16WithoutBOM(raw); ok {
+			return []byte(text), true, nil
+		}
+		if utf8.Valid(raw) {
 			return nil, false, fmt.Errorf("%w: TXT 文件包含 NUL 字符", errInvalidUpload)
 		}
-		return raw, false, nil
-	case validGB18030(raw):
-		text, _, err := transform.Bytes(simplifiedchinese.GB18030.NewDecoder(), raw)
-		if err != nil || bytes.IndexByte(text, 0) >= 0 || bytes.ContainsRune(text, utf8.RuneError) {
-			return nil, false, fmt.Errorf("%w: GB18030 文本转换失败", errInvalidUpload)
+		if validGB18030(raw) {
+			text, _, err := transform.Bytes(simplifiedchinese.GB18030.NewDecoder(), raw)
+			if err != nil || bytes.IndexByte(text, 0) >= 0 || bytes.ContainsRune(text, utf8.RuneError) {
+				return nil, false, fmt.Errorf("%w: GB18030 文本转换失败", errInvalidUpload)
+			}
+			return text, true, nil
 		}
-		return text, true, nil
-	default:
-		return nil, false, fmt.Errorf("%w: 无法识别 TXT 编码，请转换为 UTF-8 后重试", errInvalidUpload)
+		return nil, false, fmt.Errorf("%w: 无法可靠识别 TXT 编码，请将文件另存为 UTF-8 后重试", errInvalidUpload)
 	}
+}
+
+// decodeUTF16WithoutBOM 只转换文本特征明确、且两个端序中只有一个可信的
+// UTF-16 内容。无 BOM 的字节流不存在绝对可靠的编码标识，歧义时交给后续
+// 已知编码分支或返回可行动的错误，不能静默产出乱码。
+func decodeUTF16WithoutBOM(raw []byte) (string, bool) {
+	if len(raw) < 8 || len(raw)%2 != 0 {
+		return "", false
+	}
+
+	var candidates []string
+	for _, order := range []binary.ByteOrder{binary.LittleEndian, binary.BigEndian} {
+		text, err := decodeUTF16Text(raw, order)
+		if err == nil && likelyChineseNovelText(text) {
+			candidates = append(candidates, text)
+		}
+	}
+	if len(candidates) != 1 {
+		return "", false
+	}
+	return candidates[0], true
+}
+
+func likelyChineseNovelText(text string) bool {
+	var meaningful, recognized, han int
+	for _, r := range text {
+		switch {
+		case unicode.IsSpace(r):
+			continue
+		case unicode.Is(unicode.Han, r):
+			meaningful++
+			recognized++
+			han++
+		case r <= unicode.MaxASCII && (unicode.IsLetter(r) || unicode.IsDigit(r)):
+			meaningful++
+			recognized++
+		case strings.ContainsRune("，。！？；：、“”‘’（）【】《》〈〉…—-", r):
+			meaningful++
+			recognized++
+		case unicode.IsControl(r):
+			return false
+		default:
+			meaningful++
+		}
+	}
+	return meaningful >= 4 && han > 0 && recognized*100 >= meaningful*75
 }
 
 func decodeUTF16Text(raw []byte, order binary.ByteOrder) (string, error) {

@@ -30,6 +30,7 @@ func TestParseUpload(t *testing.T) {
 		coverURL    string
 		maxBytes    int64
 		wantErr     error
+		wantMessage string
 		wantDisplay string
 		wantText    string
 	}{
@@ -40,10 +41,12 @@ func TestParseUpload(t *testing.T) {
 		{name: "拒绝二进制", filename: "novel.txt", content: []byte{'a', 0, 'b'}, maxBytes: 1024, wantErr: errInvalidUpload},
 		{name: "自动转换UTF16LE", filename: "novel.txt", content: utf16Text(t, "第一章 开始\n正文", binary.LittleEndian), maxBytes: 1024, wantDisplay: "novel.txt", wantText: "第一章 开始\n正文"},
 		{name: "自动转换UTF16BE", filename: "novel.txt", content: utf16Text(t, "第一章 开始\n正文", binary.BigEndian), maxBytes: 1024, wantDisplay: "novel.txt", wantText: "第一章 开始\n正文"},
+		{name: "H5无BOMUTF16LE", filename: "父可敌国.txt", content: utf16Text(t, "父可敌国\n第一章 开始\n正文😀", binary.LittleEndian)[2:], maxBytes: 1024, wantDisplay: "父可敌国.txt", wantText: "父可敌国\n第一章 开始\n正文😀"},
+		{name: "H5无BOMUTF16BE", filename: "父可敌国.txt", content: utf16Text(t, "父可敌国\n第一章 开始\n正文😀", binary.BigEndian)[2:], maxBytes: 1024, wantDisplay: "父可敌国.txt", wantText: "父可敌国\n第一章 开始\n正文😀"},
 		{name: "自动转换GB18030", filename: "novel.txt", content: gb18030Text(t, "第一章 开始\n正文"), maxBytes: 1024, wantDisplay: "novel.txt", wantText: "第一章 开始\n正文"},
 		{name: "自动转换CP936欧元符号", filename: "novel.txt", content: []byte{'a', 0x80, 'b'}, maxBytes: 1024, wantDisplay: "novel.txt", wantText: "a€b"},
 		{name: "拒绝损坏UTF16", filename: "novel.txt", content: []byte{0xFF, 0xFE, 0x00, 0xD8}, maxBytes: 1024, wantErr: errInvalidUpload},
-		{name: "拒绝无法识别编码", filename: "novel.txt", content: []byte{0x81, 0x30, 0x81}, maxBytes: 1024, wantErr: errInvalidUpload},
+		{name: "拒绝无法可靠识别编码", filename: "novel.txt", content: []byte{0x81, 0x30, 0x81}, maxBytes: 1024, wantErr: errInvalidUpload, wantMessage: "另存为 UTF-8 后重试"},
 		{name: "拒绝过大", filename: "novel.txt", content: []byte("12345"), maxBytes: 4, wantErr: errUploadTooLarge},
 	}
 
@@ -75,6 +78,9 @@ func TestParseUpload(t *testing.T) {
 			if tt.wantErr != nil {
 				if err == nil || !errors.Is(err, tt.wantErr) {
 					t.Fatalf("parseUpload() error = %v, want %v", err, tt.wantErr)
+				}
+				if tt.wantMessage != "" && !strings.Contains(err.Error(), tt.wantMessage) {
+					t.Fatalf("parseUpload() error = %q, want message containing %q", err, tt.wantMessage)
 				}
 				entries, readErr := os.ReadDir(incoming)
 				if readErr == nil && len(entries) != 0 {

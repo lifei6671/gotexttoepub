@@ -162,7 +162,9 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	case ".js":
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	}
-	w.Header().Set("Cache-Control", "no-cache")
+	// Safari 在服务更新后可能继续保留旧页面或脚本。前端和 API 必须同版，
+	// 因而任一资源命中缓存都可能让新服务端配上旧上传逻辑。
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
 		_, _ = w.Write(content)

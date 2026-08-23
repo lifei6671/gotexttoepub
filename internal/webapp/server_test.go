@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"image"
@@ -20,6 +21,7 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lifei6671/gotexttoepub/internal/jobs"
 )
@@ -156,6 +158,139 @@ func TestServerConversionFlow(t *testing.T) {
 	}
 	if len(raw) == 0 {
 		t.Fatal("downloaded EPUB is empty")
+	}
+}
+
+func TestServerStaticAssetsAreNotCached(t *testing.T) {
+	server := newReviewServer(t)
+	for _, path := range []string{"/", "/app.css", "/app.js"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200", path, recorder.Code)
+		}
+		if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+			t.Fatalf("GET %s Cache-Control = %q, want no-store", path, got)
+		}
+	}
+}
+
+// iPhone Safari 与其他浏览器都会经 FormData 提交同样的 multipart 内容。
+func TestServerAcceptsBrowserMultipartNoBOMUTF16(t *testing.T) {
+	dataDir := t.TempDir()
+	convertedText := make(chan []byte, 1)
+	manager, err := jobs.NewManager(jobs.Config{
+		DataDir:         dataDir,
+		Workers:         1,
+		QueueSize:       1,
+		PerIPLimit:      1,
+		Retention:       time.Hour,
+		CleanupInterval: time.Hour,
+		MaxDiskBytes:    10 << 20,
+		Convert: func(ctx context.Context, job *jobs.Job, inputPath, coverPath string) (string, int64, error) {
+			text, readErr := os.ReadFile(inputPath)
+			if readErr != nil {
+				return "", 0, readErr
+			}
+			convertedText <- text
+			return fakeConvert(ctx, job, inputPath, coverPath)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := manager.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	server, err := NewServer(Config{
+		Assets:         testAssets(),
+		Manager:        manager,
+		CoverFetcher:   rejectingCoverFetcher{},
+		DataDir:        dataDir,
+		MaxUploadBytes: 1024,
+		MaxCoverBytes:  1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantText := "父可敌国\n第一章 开始\n正文😀"
+	body, contentType := multipartTXTBytes(t, "父可敌国.txt", utf16Text(t, wantText, binary.LittleEndian)[2:])
+	request := httptest.NewRequest(http.MethodPost, "/api/conversions", body)
+	request.Header.Set("Content-Type", contentType)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	select {
+	case got := <-convertedText:
+		if string(got) != wantText || !utf8.Valid(got) || bytes.IndexByte(got, 0) >= 0 {
+			t.Fatalf("converter input = %q, want UTF-8 %q", got, wantText)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("browser multipart upload did not reach converter")
+	}
+}
+
+func TestServerRejectsUnrecognizedBrowserUploadWithActionableError(t *testing.T) {
+	dataDir := t.TempDir()
+	manager, err := jobs.NewManager(jobs.Config{
+		DataDir:         dataDir,
+		Workers:         1,
+		QueueSize:       1,
+		PerIPLimit:      1,
+		Retention:       time.Hour,
+		CleanupInterval: time.Hour,
+		MaxDiskBytes:    10 << 20,
+		Convert:         fakeConvert,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := manager.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	server, err := NewServer(Config{
+		Assets:         testAssets(),
+		Manager:        manager,
+		CoverFetcher:   rejectingCoverFetcher{},
+		DataDir:        dataDir,
+		MaxUploadBytes: 1024,
+		MaxCoverBytes:  1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, contentType := multipartTXTBytes(t, "novel.txt", []byte{0x81, 0x30, 0x81})
+	request := httptest.NewRequest(http.MethodPost, "/api/conversions", body)
+	request.Header.Set("Content-Type", contentType)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("submit status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != "INVALID_UPLOAD" || !strings.Contains(response.Error.Message, "另存为 UTF-8 后重试") {
+		t.Fatalf("error response = %#v, want actionable INVALID_UPLOAD", response.Error)
 	}
 }
 
@@ -460,6 +595,10 @@ func fakeConvert(_ context.Context, _ *jobs.Job, inputPath, _ string) (string, i
 }
 
 func multipartTXT(t *testing.T, filename, content string) (*bytes.Buffer, string) {
+	return multipartTXTBytes(t, filename, []byte(content))
+}
+
+func multipartTXTBytes(t *testing.T, filename string, content []byte) (*bytes.Buffer, string) {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -467,7 +606,7 @@ func multipartTXT(t *testing.T, filename, content string) (*bytes.Buffer, string
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := io.WriteString(part, content); err != nil {
+	if _, err := part.Write(content); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {

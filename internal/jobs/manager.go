@@ -373,6 +373,10 @@ func (m *Manager) Submit(_ context.Context, in SubmitInput) (Job, error) {
 	m.queueOrder = append(m.queueOrder, id)
 	m.recalculateQueuePositionsLocked()
 	m.queue <- id
+	m.cfg.Logger.Info("转换任务已入队",
+		"job_id", job.ID,
+		"queue_position", job.QueuePosition,
+	)
 	cleanupSources = false
 	return *job, nil
 }
@@ -446,6 +450,10 @@ func (m *Manager) ContinueReview(id, ownerHash string) (Job, error) {
 		job.QueuePosition = previousPosition
 		return Job{}, fmt.Errorf("persist continued review: %w", err)
 	}
+	m.cfg.Logger.Info("确认审核任务并重新入队",
+		"job_id", job.ID,
+		"queue_position", job.QueuePosition,
+	)
 	return *job, nil
 }
 
@@ -616,6 +624,9 @@ func (m *Manager) runJob(id string) {
 	job.Status = StatusConverting
 	job.QueuePosition = 0
 	_ = m.persistLocked(job)
+	m.cfg.Logger.Info("转换任务开始",
+		"job_id", job.ID,
+	)
 	snapshot := *job
 	inputPath := filepath.Join(m.jobDir(id), inputFile)
 	coverPath := filepath.Join(m.jobDir(id), coverFile)
@@ -728,6 +739,11 @@ func (m *Manager) runJob(id string) {
 	_ = os.RemoveAll(filepath.Join(m.jobDir(id), workDir))
 	_ = m.persistLocked(job)
 	_ = m.cleanupLocked(0)
+	m.cfg.Logger.Info("转换任务结束",
+		"job_id", job.ID,
+		"status", job.Status,
+		"error_code", job.ErrorCode,
+	)
 	m.promoteRecoveryLocked()
 }
 
