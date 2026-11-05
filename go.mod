@@ -2,6 +2,9 @@ module github.com/lifei6671/gotexttoepub
 
 go 1.26
 
+// Pin the Windows nested-TOC fix pending https://github.com/go-shiori/go-epub/pull/62.
+replace github.com/go-shiori/go-epub => github.com/ystyle/go-epub v0.0.0-20250425133851-dba4e6a949ec
+
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/go-shiori/go-epub v1.2.1
